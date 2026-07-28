@@ -317,23 +317,87 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
 
         # Extract key information
         confidence = primary_cause.get("probFailure", 0)
-        entity_label = primary_cause.get("entityLabel", "Unknown")
-        entity_type = primary_cause.get("entityType", "")
 
-        # Try to create a meaningful summary from explainability
+        topology = primary_cause.get("topology", {})
+        shortest_path = topology.get("shortestPath", [])
+
+        # Build a pluginId-suffix → readable type map
+        _PLUGIN_TYPE_MAP = {
+            "Service": "Service",
+            "Endpoint": "Endpoint",
+            "Application": "Application",
+        }
+
+        def _node_type(node: Dict[str, Any]) -> str:
+            plugin_id = node.get("pluginId", "")
+            suffix = plugin_id.split(".")[-1] if plugin_id else ""
+            return _PLUGIN_TYPE_MAP.get(suffix, suffix)
+
+        if shortest_path:
+            # The last node in the shortest path is the root cause entity
+            rc_node = shortest_path[-1]
+            entity_type = _node_type(rc_node)
+        else:
+            # Fallback to entityID block
+            rc_node = None
+            entity_id = primary_cause.get("entityID", {})
+            plugin_id = entity_id.get("pluginId", "")
+            entity_type = _PLUGIN_TYPE_MAP.get(plugin_id.split(".")[-1], plugin_id.split(".")[-1]) if plugin_id else ""
+
+        # Build topology path as a list of objects so callers can use snapshotId / steadyId
+        # for further lookups (e.g. infrastructure snapshot queries).
+        topology_nodes = []
+        if shortest_path:
+            for node in shortest_path:
+                entry: Dict[str, Any] = {"type": _node_type(node), "steadyId": node.get("steadyId")}
+                if node.get("snapshotId"):
+                    entry["snapshotId"] = node.get("snapshotId")
+                topology_nodes.append(entry)
+
+        # Human-readable path string (e.g. "Service → Service → Service → Endpoint")
+        topology_path = " → ".join(n["type"] or n["steadyId"] or "?" for n in topology_nodes) if topology_nodes else ""
+
+        # Extract explainability stats — deduplicate on connectedServiceId, keep the
+        # entry that covers "all" traffic as the primary summary signal.
         summary = "Root cause identified"
         explainability = primary_cause.get("explainability", [])
-        if explainability and isinstance(explainability, list) and len(explainability) > 0:
-            first_explain = explainability[0]
-            if isinstance(first_explain, dict):
-                summary = first_explain.get("text", summary)
+        # Find the "all" entry first (most representative), fall back to first entry
+        primary_explain = next(
+            (e for e in explainability if isinstance(e, dict) and e.get("connectedServiceId") == "all"),
+            explainability[0] if explainability and isinstance(explainability[0], dict) else None,
+        )
+        if primary_explain:
+            pct_through = primary_explain.get("percentageFailedThroughRC")
+            pct_not_through = primary_explain.get("percentageFailedNotThroughRC")
+            calls_through = primary_explain.get("numCallsInAggregationThroughRC")
+            calls_not_through = primary_explain.get("numCallsInAggregationNotThroughRC")
+            if pct_through is not None and pct_not_through is not None:
+                summary = (
+                    f"{int(pct_through * 100)}% of calls through root cause failed "
+                    f"vs {int(pct_not_through * 100)}% not through it"
+                )
+                if calls_through is not None and calls_not_through is not None:
+                    summary += f" ({calls_through} calls through RC, {calls_not_through} not through RC)"
+            else:
+                summary = primary_explain.get("text", summary)
 
-        return {
+        rc_entity: Dict[str, Any] = {
+            "type": entity_type,
+            "steadyId": rc_node.get("steadyId") if shortest_path else (primary_cause.get("entityID") or {}).get("steadyId"),
+        }
+        if shortest_path and rc_node.get("snapshotId"):
+            rc_entity["snapshotId"] = rc_node.get("snapshotId")
+
+        result: Dict[str, Any] = {
             "found": True,
             "confidence": round(confidence, 2),
-            "rootCauseEntity": f"{entity_type}: {entity_label}" if entity_type else entity_label,
-            "summary": summary
+            "rootCauseEntity": rc_entity,
+            "summary": summary,
         }
+        if topology_nodes:
+            result["topologyPath"] = topology_path
+            result["topologyNodes"] = topology_nodes
+        return result
 
     def _optimize_event_data(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -409,10 +473,16 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
                 if event.get("mobileAppId"):
                     optimized["entity"]["mobileAppId"] = event.get("mobileAppId")
 
-            # Simplify metrics to just names (skip if empty, which is common for agent monitoring)
+            # Simplify metrics to just names (skip if empty, which is common for agent monitoring).
+            # The API may return metrics as plain strings or as {"metricName": ...} dicts.
             metrics = event.get("metrics", [])
-            if metrics and len(metrics) > 0:
-                metric_names = [m.get("metricName") for m in metrics if m.get("metricName")]
+            if metrics:
+                metric_names = []
+                for m in metrics:
+                    if isinstance(m, str):
+                        metric_names.append(m)
+                    elif isinstance(m, dict) and m.get("metricName"):
+                        metric_names.append(m["metricName"])
                 if metric_names:
                     optimized["affectedMetrics"] = metric_names
 
@@ -514,64 +584,42 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
             if not event_id:
                 return {"error": "event_id parameter is required"}
 
-            # Try standard API call first
+            # Use the raw response path directly to avoid Pydantic model
+            # validation errors in the SDK's ServiceEventResult model, which
+            # rejects the flat primitive shapes the API actually returns for
+            # fields like `metrics`, `recentEvents`, and `probableCause.found`.
             try:
-                result = api_client.get_event(event_id=event_id)
+                response_data = api_client.get_event_without_preload_content(event_id=event_id)
 
-                # New robust conversion to dict
-                if hasattr(result, "to_dict"):
-                    result_dict = result.to_dict()
-                elif isinstance(result, dict):
-                    result_dict = result
-                else:
-                    # Convert to dictionary using __dict__ or as a fallback, create a new dict with string representation
-                    result_dict = getattr(result, "__dict__", {"data": str(result)})
+                if response_data.status == 404:
+                    return {"error": f"Event with ID {event_id} not found", "event_id": event_id}
+                elif response_data.status in (401, 403):
+                    return {"error": "Authentication failed. Please check your API token and permissions."}
+                elif response_data.status != 200:
+                    error_message = f"Failed to get event: HTTP {response_data.status}"
+                    logger.error(error_message)
+                    return {"error": error_message, "event_id": event_id}
 
-                # Optimize event data to reduce token usage
+                response_text = response_data.data.decode('utf-8')
+
+                try:
+                    result_dict = json.loads(response_text)
+                except json.JSONDecodeError as json_err:
+                    error_message = f"Failed to parse JSON response: {json_err}"
+                    logger.error(error_message)
+                    return {"error": error_message, "event_id": event_id}
+
                 optimized_result = self._optimize_event_data(result_dict)
-
                 logger.debug(f"Successfully retrieved event with ID {event_id}")
                 return optimized_result
 
             except Exception as api_error:
-                # Check for specific error types
                 if hasattr(api_error, 'status'):
                     if api_error.status == 404:
                         return {"error": f"Event with ID {event_id} not found", "event_id": event_id}
                     elif api_error.status in (401, 403):
                         return {"error": "Authentication failed. Please check your API token and permissions."}
-
-                # Try fallback approach
-                logger.warning(f"Standard API call failed: {api_error}, trying fallback approach")
-
-                # Use the without_preload_content version to get the raw response
-                try:
-                    response_data = api_client.get_event_without_preload_content(event_id=event_id)
-
-                    # Check if the response was successful
-                    if response_data.status != 200:
-                        error_message = f"Failed to get event: HTTP {response_data.status}"
-                        logger.error(error_message)
-                        return {"error": error_message, "event_id": event_id}
-
-                    # Read the response content
-                    response_text = response_data.data.decode('utf-8')
-
-                    # Parse the JSON manually
-                    try:
-                        result_dict = json.loads(response_text)
-                        # Optimize event data to reduce token usage
-                        optimized_result = self._optimize_event_data(result_dict)
-                        logger.debug(f"Successfully retrieved event with ID {event_id} using fallback")
-                        return optimized_result
-                    except json.JSONDecodeError as json_err:
-                        error_message = f"Failed to parse JSON response: {json_err}"
-                        logger.error(error_message)
-                        return {"error": error_message, "event_id": event_id}
-
-                except Exception as fallback_error:
-                    logger.error(f"Fallback approach failed: {fallback_error}")
-                    raise
+                raise
 
         except Exception as e:
             logger.error(f"Error in get_event: {e}", exc_info=True)

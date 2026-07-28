@@ -93,12 +93,9 @@ class TestAgentMonitoringEventsE2E:
     async def test_get_event_error(self, mock_events_api, instana_credentials):
         """Test error handling when getting an event by ID."""
 
-        # Create a mock API client that raises an exception
+        # Create a mock API client that raises an ApiException with status=404
         mock_api_client = MagicMock()
-        # Set up the mock to return a 404 error
-        mock_api_client.get_event.side_effect = ApiException(status=404, reason="Not Found")
-        # Mock the fallback approach to also fail
-        mock_api_client.get_event_without_preload_content.side_effect = Exception("Fallback error")
+        mock_api_client.get_event_without_preload_content.side_effect = ApiException(status=404, reason="Not Found")
 
         # Create the client
         client = AgentMonitoringEventsMCPTools(
@@ -1591,57 +1588,41 @@ class TestAgentMonitoringEventsE2E:
     @pytest.mark.mocked
     @patch('src.event.events_tools.EventsApi')
     async def test_get_event_with_various_response_formats(self, mock_events_api, instana_credentials):
-        """Test get_event with various response formats."""
-        # Create different mock responses
-        standard_response = MagicMock()
-        standard_response.to_dict.return_value = {
-            "eventId": "event-123",
-            "type": "incident",
-            "severity": 10
-        }
+        """Test get_event with various response formats via the raw API path."""
 
-        minimal_response = MagicMock()
-        minimal_response.to_dict.return_value = {
-            "eventId": "event-456"
-        }
-
-        detailed_response = MagicMock()
-        detailed_response.to_dict.return_value = {
-            "eventId": "event-789",
-            "type": "incident",
-            "severity": 10,
-            "start": 1625097600000,
-            "end": 1625097900000,
-            "entityId": "entity-123",
-            "entityName": "host-1",
-            "entityLabel": "host-1.example.com",
-            "problem": "High CPU Usage",
-            "detail": "CPU usage exceeded 90% for 5 minutes",
-            "fixSuggestion": "Check for runaway processes",
-            "metrics": [
-                {"metricName": "cpu.usage", "value": 95.5, "unit": "%"}
-            ],
-            "tags": {
-                "host.name": "host-1",
-                "zone": "us-east-1"
-            }
-        }
+        def make_raw_response(payload, status=200):
+            r = MagicMock()
+            r.status = status
+            r.data = json.dumps(payload).encode("utf-8")
+            return r
 
         # Create a mock API client
         mock_api_client = MagicMock()
 
-        # Set up the mock to return different responses based on event ID
-        def get_event_side_effect(event_id, **kwargs):
+        # Set up the raw-response mock to return different payloads based on event ID
+        def get_event_without_preload_side_effect(event_id, **kwargs):
             if event_id == "event-123":
-                return standard_response
+                return make_raw_response({"eventId": "event-123", "type": "incident", "severity": 10})
             elif event_id == "event-456":
-                return minimal_response
+                return make_raw_response({"eventId": "event-456"})
             elif event_id == "event-789":
-                return detailed_response
+                return make_raw_response({
+                    "eventId": "event-789",
+                    "type": "incident",
+                    "severity": 10,
+                    "start": 1625097600000,
+                    "end": 1625097900000,
+                    "entityLabel": "host-1.example.com",
+                    "entityType": "host",
+                    "problem": "High CPU Usage",
+                    "detail": "CPU usage exceeded 90% for 5 minutes",
+                    "fixSuggestion": "Check for runaway processes",
+                    "metrics": [{"metricName": "cpu.usage", "value": 95.5, "unit": "%"}],
+                })
             else:
-                raise ApiException(status=404, reason="Not Found")
+                return make_raw_response({}, status=404)
 
-        mock_api_client.get_event.side_effect = get_event_side_effect
+        mock_api_client.get_event_without_preload_content.side_effect = get_event_without_preload_side_effect
 
         # Create the client
         client = AgentMonitoringEventsMCPTools(
@@ -1655,24 +1636,21 @@ class TestAgentMonitoringEventsE2E:
         result3 = await client.get_event(event_id="event-789", api_client=mock_api_client)
         result4 = await client.get_event(event_id="non-existent", api_client=mock_api_client)
 
-        # Verify standard response - get_event now runs _optimize_event_data
+        # Verify standard response
         assert isinstance(result1, dict)
         assert result1.get("type") == "incident"
         assert result1.get("severity") == 10
 
-        # Verify minimal response - _optimize_event_data returns base structure
-        assert isinstance(result2, dict)
+        # Verify minimal response returns base structure
         assert isinstance(result2, dict)
 
-        # Verify detailed response - _optimize_event_data transforms the structure
+        # Verify detailed response is transformed correctly
         assert isinstance(result3, dict)
         assert result3.get("type") == "incident"
         assert result3.get("problem") == "High CPU Usage"
         assert result3.get("start") == 1625097600000
-        # _optimize_event_data includes entity info for incidents
         assert "entity" in result3
         assert result3["entity"]["label"] == "host-1.example.com"
-        # detail and fixSuggestion are included when non-empty
         assert result3.get("detail") == "CPU usage exceeded 90% for 5 minutes"
         assert result3.get("fixSuggestion") == "Check for runaway processes"
 
@@ -1893,34 +1871,21 @@ class TestAgentMonitoringEventsE2E:
     @pytest.mark.mocked
     @patch('src.event.events_tools.EventsApi')
     async def test_get_event_to_dict_conversion(self, mock_events_api, instana_credentials):
-        """Test get_event with to_dict conversion"""
-        # Create a mock API client
+        """Test get_event returns incident fields via the raw API path."""
         mock_api_client = MagicMock()
-
-        # Create a mock response with to_dict method
         mock_response = MagicMock()
-        mock_response.to_dict.return_value = {
-            "id": "event-123",
-            "type": "incident",
-            "severity": 10
-        }
+        mock_response.status = 200
+        mock_response.data = json.dumps({"eventId": "event-123", "type": "incident", "severity": 10}).encode("utf-8")
+        mock_api_client.get_event_without_preload_content.return_value = mock_response
 
-        # Set up the mock to return the mock response
-        mock_api_client.get_event.return_value = mock_response
-
-        # Create the client
         client = AgentMonitoringEventsMCPTools(
             read_token=instana_credentials["api_token"],
             base_url=instana_credentials["base_url"]
         )
 
-        # Test the method
         result = await client.get_event(event_id="event-123", api_client=mock_api_client)
 
-        # Verify the result contains the expected data
-        # get_event now runs _optimize_event_data which transforms the structure
         assert isinstance(result, dict)
-        # _optimize_event_data preserves type and severity for incidents
         assert result.get("type") == "incident"
         assert result.get("severity") == 10
 
@@ -1928,33 +1893,21 @@ class TestAgentMonitoringEventsE2E:
     @pytest.mark.mocked
     @patch('src.event.events_tools.EventsApi')
     async def test_get_event_dict_conversion(self, mock_events_api, instana_credentials):
-        """Test get_event with dict conversion"""
-        # Create a mock API client
+        """Test get_event with a dict-shaped raw response."""
         mock_api_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.data = json.dumps({"eventId": "event-123", "type": "incident", "severity": 10}).encode("utf-8")
+        mock_api_client.get_event_without_preload_content.return_value = mock_response
 
-        # Create a mock response as a dictionary
-        mock_response = {
-            "id": "event-123",
-            "type": "incident",
-            "severity": 10
-        }
-
-        # Set up the mock to return the mock response
-        mock_api_client.get_event.return_value = mock_response
-
-        # Create the client
         client = AgentMonitoringEventsMCPTools(
             read_token=instana_credentials["api_token"],
             base_url=instana_credentials["base_url"]
         )
 
-        # Test the method
         result = await client.get_event(event_id="event-123", api_client=mock_api_client)
 
-        # Verify the result contains the expected data
-        # get_event now runs _optimize_event_data which transforms the structure
         assert isinstance(result, dict)
-        # _optimize_event_data preserves type and severity for incidents
         assert result.get("type") == "incident"
         assert result.get("severity") == 10
 
@@ -1962,35 +1915,30 @@ class TestAgentMonitoringEventsE2E:
     @pytest.mark.mocked
     @patch('src.event.events_tools.EventsApi')
     async def test_get_event_other_conversion(self, mock_events_api, instana_credentials):
-        """Test get_event with other object conversion"""
-        # Create a mock API client
+        """Test get_event with an incident response that includes start/end."""
         mock_api_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.data = json.dumps({
+            "eventId": "event-123",
+            "type": "incident",
+            "severity": 10,
+            "start": 1625097600000,
+            "end": 1625097900000,
+            "problem": "High CPU",
+            "state": "open",
+            "entityLabel": "host-1",
+            "entityType": "host",
+        }).encode("utf-8")
+        mock_api_client.get_event_without_preload_content.return_value = mock_response
 
-        # Create a mock response as a custom object with __dict__
-        class CustomResponse:
-            def __init__(self):
-                self.id = "event-123"
-                self.type = "incident"
-                self.severity = 10
-
-        mock_response = CustomResponse()
-
-        # Set up the mock to return the mock response
-        mock_api_client.get_event.return_value = mock_response
-
-        # Create the client
         client = AgentMonitoringEventsMCPTools(
             read_token=instana_credentials["api_token"],
             base_url=instana_credentials["base_url"]
         )
 
-        # Test the method
         result = await client.get_event(event_id="event-123", api_client=mock_api_client)
 
-        # Verify the result contains the expected data
-        # get_event now runs _optimize_event_data which transforms the structure
-        # CustomResponse.__dict__ gives {"id": "event-123", "type": "incident", "severity": 10}
-        # _optimize_event_data processes this and returns optimized structure
         assert isinstance(result, dict)
         assert result.get("type") == "incident"
         assert result.get("severity") == 10

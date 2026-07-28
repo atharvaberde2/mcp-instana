@@ -120,165 +120,103 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.assertEqual(self.client.base_url, self.base_url)
 
     def test_get_event_success(self):
-        """Test get_event with a successful response"""
-        # Set up the mock response - include fields that survive _optimize_event_data
+        """Test get_event with a successful response via the raw API path."""
         event_id = "test_event_id"
-        mock_result = {"eventId": event_id, "data": "test_data", "type": "incident", "state": "open", "problem": "Test problem", "start": 1000000}
-        self.events_api.get_event.return_value = mock_result
-
-        # Call the method
-        result = asyncio.run(self.client.get_event(event_id=event_id))
-
-        # Check that the mock was called with the correct arguments
-        self.events_api.get_event.assert_called_once_with(event_id=event_id)
-
-        # Check that the result contains the event ID and key fields
-        # Note: get_event now runs _optimize_event_data which transforms the structure
-        self.assertEqual(result["eventId"], event_id)
-        self.assertIn("type", result)
-        self.assertIn("problem", result)
-
-    def test_get_event_error(self):
-        """Test get_event error handling"""
-        # Set up the mock to raise an exception
-        event_id = "test_event_id"
-        self.events_api.get_event.side_effect = Exception("Test error")
-
-        # Call the method and store result for assertions
-        result = asyncio.run(self.client.get_event(event_id=event_id))
-
-        # Check that the result contains an error message
-        self.assertIn("error", result)
-        self.assertIn("Failed to get event", result["error"])
-
-    def test_get_event_empty_id(self):
-        """Test get_event with empty event_id"""
-        # Call the method with empty event_id and store result for assertions
-        result = asyncio.run(self.client.get_event(event_id=""))
-
-        # Check that the result contains an error message
-        self.assertIn("error", result)
-        self.assertEqual(result["error"], "event_id parameter is required")
-
-    def test_get_event_404_error(self):
-        """Test get_event with 404 error"""
-        # Create a mock error with status attribute
-        class MockError(Exception):
-            def __init__(self):
-                self.status = 404
-
-        mock_error = MockError()
-
-        # Set up the mock to raise the error
-        event_id = "nonexistent_id"
-        self.events_api.get_event.side_effect = mock_error
-
-        # Call the method and store result for assertions
-        result = asyncio.run(self.client.get_event(event_id=event_id))
-
-        # Check that the result contains the expected error message
-        self.assertIn("error", result)
-        self.assertEqual(result["error"], f"Event with ID {event_id} not found")
-        self.assertEqual(result["event_id"], event_id)
-
-    def test_get_event_401_error(self):
-        """Test get_event with 401 error"""
-        # Create a mock error with status attribute
-        class MockError(Exception):
-            def __init__(self):
-                self.status = 401
-
-        mock_error = MockError()
-
-        # Set up the mock to raise the error
-        event_id = "test_id"
-        self.events_api.get_event.side_effect = mock_error
-
-        # Call the method and store result for assertions
-        result = asyncio.run(self.client.get_event(event_id=event_id))
-
-        # Check that the result contains the expected error message
-        self.assertIn("error", result)
-        self.assertEqual(result["error"], "Authentication failed. Please check your API token and permissions.")
-
-    def test_get_event_fallback_success(self):
-        """Test get_event fallback approach success"""
-        # Set up the mock to raise an exception for standard API
-        event_id = "test_event_id"
-        self.events_api.get_event.side_effect = Exception("Test error")
-
-        # Set up the mock response for fallback approach - include fields that survive _optimize_event_data
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.data = b'{"eventId": "test_event_id", "type": "incident", "state": "open", "problem": "Test problem", "start": 1000000}'
         self.events_api.get_event_without_preload_content.return_value = mock_response
 
-        # Call the method
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        # Check that the fallback approach was used
         self.events_api.get_event_without_preload_content.assert_called_once_with(event_id=event_id)
-
-        # Check that the result contains the expected data
-        # Note: get_event now runs _optimize_event_data which transforms the structure
-        self.assertEqual(result["eventId"], "test_event_id")
+        self.assertEqual(result["eventId"], event_id)
         self.assertIn("type", result)
         self.assertIn("problem", result)
 
-    def test_get_event_fallback_http_error(self):
-        """Test get_event fallback approach with HTTP error"""
-        # Set up the mock to raise an exception for standard API
+    def test_get_event_error(self):
+        """Test get_event error handling when the raw API call raises."""
         event_id = "test_event_id"
-        self.events_api.get_event.side_effect = Exception("Test error")
+        self.events_api.get_event_without_preload_content.side_effect = Exception("Test error")
 
-        # Set up the mock response for fallback approach with error status
+        result = asyncio.run(self.client.get_event(event_id=event_id))
+
+        self.assertIn("error", result)
+        self.assertIn("Failed to get event", result["error"])
+
+    def test_get_event_empty_id(self):
+        """Test get_event with empty event_id."""
+        result = asyncio.run(self.client.get_event(event_id=""))
+
+        self.assertIn("error", result)
+        self.assertEqual(result["error"], "event_id parameter is required")
+
+    def test_get_event_404_error(self):
+        """Test get_event returns a not-found message on HTTP 404."""
+        event_id = "nonexistent_id"
         mock_response = MagicMock()
         mock_response.status = 404
         self.events_api.get_event_without_preload_content.return_value = mock_response
 
-        # Call the method and store result for assertions
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        # Check that the result contains the expected error message
         self.assertIn("error", result)
-        self.assertEqual(result["error"], "Failed to get event: HTTP 404")
+        self.assertEqual(result["error"], f"Event with ID {event_id} not found")
         self.assertEqual(result["event_id"], event_id)
 
-    def test_get_event_fallback_json_error(self):
-        """Test get_event fallback approach with JSON decode error"""
-        # Set up the mock to raise an exception for standard API
-        event_id = "test_event_id"
-        self.events_api.get_event.side_effect = Exception("Test error")
+    def test_get_event_401_error(self):
+        """Test get_event returns auth error on HTTP 401."""
+        event_id = "test_id"
+        mock_response = MagicMock()
+        mock_response.status = 401
+        self.events_api.get_event_without_preload_content.return_value = mock_response
 
-        # Set up the mock response for fallback approach with invalid JSON
+        result = asyncio.run(self.client.get_event(event_id=event_id))
+
+        self.assertIn("error", result)
+        self.assertEqual(result["error"], "Authentication failed. Please check your API token and permissions.")
+
+    def test_get_event_http_error(self):
+        """Test get_event returns error on non-200/non-404 HTTP status."""
+        event_id = "test_event_id"
+        mock_response = MagicMock()
+        mock_response.status = 500
+        self.events_api.get_event_without_preload_content.return_value = mock_response
+
+        result = asyncio.run(self.client.get_event(event_id=event_id))
+
+        self.assertIn("error", result)
+        self.assertEqual(result["error"], "Failed to get event: HTTP 500")
+        self.assertEqual(result["event_id"], event_id)
+
+    def test_get_event_json_error(self):
+        """Test get_event returns error when response body is not valid JSON."""
+        event_id = "test_event_id"
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.data = b'invalid json'
         self.events_api.get_event_without_preload_content.return_value = mock_response
 
-        # Call the method and store result for assertions
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        # Check that the result contains the expected error message
         self.assertIn("error", result)
         self.assertIn("Failed to parse JSON response", result["error"])
         self.assertEqual(result["event_id"], event_id)
 
-    def test_get_event_fallback_error(self):
-        """Test get_event fallback approach with error"""
-        # Set up the mock to raise an exception for standard API
-        event_id = "test_event_id"
-        self.events_api.get_event.side_effect = Exception("Test error")
+    def test_get_event_api_exception(self):
+        """Test get_event when the API raises an exception with a status attribute."""
+        class MockError(Exception):
+            def __init__(self):
+                self.status = 404
 
-        # Set up the mock to raise an exception for fallback approach
-        self.events_api.get_event_without_preload_content.side_effect = Exception("Fallback error")
+        event_id = "nonexistent_id"
+        self.events_api.get_event_without_preload_content.side_effect = MockError()
 
-        # Call the method and store result for assertions
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        # Check that the result contains the expected error message
         self.assertIn("error", result)
-        self.assertIn("Failed to get event", result["error"])
+        self.assertEqual(result["error"], f"Event with ID {event_id} not found")
+        self.assertEqual(result["event_id"], event_id)
 
     @patch('src.event.events_tools.datetime')
     def test_get_kubernetes_info_events_with_defaults(self, mock_datetime):
@@ -1259,8 +1197,10 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             "found": True,
             "currentRootCause": [{
                 "probFailure": 0.95,
-                "entityLabel": "my-service",
-                "entityType": "service",
+                "entityID": {
+                    "pluginId": "com.instana.plugin.service",
+                    "steadyId": "svc-steady-1"
+                },
                 "explainability": [{"text": "High error rate detected"}]
             }]
         }
@@ -1268,7 +1208,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result["found"])
         self.assertEqual(result["confidence"], 0.95)
-        self.assertEqual(result["rootCauseEntity"], "service: my-service")
+        self.assertEqual(result["rootCauseEntity"], {"type": "service", "steadyId": "svc-steady-1"})
         self.assertEqual(result["summary"], "High error rate detected")
 
     def test_simplify_probable_cause_without_entity_type(self):
@@ -1277,15 +1217,149 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             "found": True,
             "currentRootCause": [{
                 "probFailure": 0.85,
-                "entityLabel": "my-entity",
-                "entityType": "",
+                "entityID": {
+                    "pluginId": "",
+                    "steadyId": "entity-steady-1"
+                },
                 "explainability": []
             }]
         }
         result = self.client._simplify_probable_cause(probable_cause)
         self.assertIsNotNone(result)
-        self.assertEqual(result["rootCauseEntity"], "my-entity")
+        self.assertEqual(result["rootCauseEntity"], {"type": "", "steadyId": "entity-steady-1"})
         self.assertEqual(result["summary"], "Root cause identified")
+
+    def test_simplify_probable_cause_with_shortest_path(self):
+        """Root cause entity type is taken from the last node's pluginId; topologyNodes carry snapshotId/steadyId."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.95,
+                "topology": {
+                    "shortestPath": [
+                        {"pluginId": "com.instana.plugin.service", "steadyId": "svc-1", "snapshotId": "snap-1"},
+                        {"pluginId": "com.instana.plugin.database", "steadyId": "db-1", "snapshotId": "snap-2"},
+                        {"pluginId": "com.instana.plugin.endpoint", "steadyId": "ep-1", "snapshotId": "snap-3"},
+                    ]
+                },
+                "explainability": []
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["rootCauseEntity"], {"type": "endpoint", "steadyId": "ep-1", "snapshotId": "snap-3"})
+        self.assertEqual(result["topologyPath"], "service → database → endpoint")
+        self.assertEqual(len(result["topologyNodes"]), 3)
+        self.assertEqual(result["topologyNodes"][2], {"type": "endpoint", "steadyId": "ep-1", "snapshotId": "snap-3"})
+
+    def test_simplify_probable_cause_topology_path_uses_steady_id_fallback(self):
+        """topologyPath uses type (from pluginId) when nodes have no label; topologyNodes carry steadyId."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.8,
+                "topology": {
+                    "shortestPath": [
+                        {"pluginId": "com.instana.plugin.service", "steadyId": "svc-abc"},
+                        {"pluginId": "com.instana.plugin.endpoint", "steadyId": "ep-xyz"},
+                    ]
+                },
+                "explainability": []
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertEqual(result["topologyPath"], "service → endpoint")
+        self.assertEqual(result["rootCauseEntity"], {"type": "endpoint", "steadyId": "ep-xyz"})
+        self.assertEqual(result["topologyNodes"][0]["steadyId"], "svc-abc")
+        self.assertEqual(result["topologyNodes"][1]["steadyId"], "ep-xyz")
+
+    def test_simplify_probable_cause_topology_path_uses_plugin_id_fallback(self):
+        """Nodes with neither label nor steadyId still produce a type-based topology path."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.7,
+                "topology": {
+                    "shortestPath": [
+                        {"pluginId": "com.instana.plugin.host"},
+                        {"pluginId": "com.instana.plugin.process"},
+                    ]
+                },
+                "explainability": []
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertEqual(result["topologyPath"], "host → process")
+
+    def test_simplify_probable_cause_no_topology_path_in_result(self):
+        """topologyPath and topologyNodes keys are absent when shortestPath is empty."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.9,
+                "entityID": {"pluginId": "com.instana.plugin.service", "steadyId": "svc-steady-9"},
+                "explainability": []
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertNotIn("topologyPath", result)
+        self.assertNotIn("topologyNodes", result)
+
+    def test_simplify_probable_cause_with_percentage_explainability(self):
+        """Summary uses failure-rate percentages when both fields are present."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.95,
+                "entityID": {"pluginId": "com.instana.plugin.endpoint", "steadyId": "ep-steady-1"},
+                "explainability": [{
+                    "percentageFailedThroughRC": 0.96,
+                    "percentageFailedNotThroughRC": 0.0
+                }]
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertIn("96% of calls through root cause failed vs 0% not through it", result["summary"])
+
+    def test_simplify_probable_cause_explainability_falls_back_to_text(self):
+        """Summary falls back to explainability text when percentages are absent."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.75,
+                "entityID": {"pluginId": "com.instana.plugin.service", "steadyId": "svc-steady-2"},
+                "explainability": [{"text": "Connection pool exhausted"}]
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertEqual(result["summary"], "Connection pool exhausted")
+
+    def test_simplify_probable_cause_entity_id_steady_id_fallback(self):
+        """entityID block exposes steadyId in rootCauseEntity dict."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.88,
+                "entityID": {"pluginId": "com.instana.plugin.database", "steadyId": "db-steady-123"},
+                "explainability": []
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertEqual(result["rootCauseEntity"], {"type": "database", "steadyId": "db-steady-123"})
+
+    def test_simplify_probable_cause_entity_id_unknown_fallback(self):
+        """rootCauseEntity steadyId is None when both label and steadyId are absent."""
+        probable_cause = {
+            "found": True,
+            "currentRootCause": [{
+                "probFailure": 0.6,
+                "entityID": {"pluginId": "com.instana.plugin.host"},
+                "explainability": []
+            }]
+        }
+        result = self.client._simplify_probable_cause(probable_cause)
+        self.assertEqual(result["rootCauseEntity"], {"type": "host", "steadyId": None})
+
 
     def test_optimize_event_data_with_detail_and_fix_suggestion(self):
         """Test _optimize_event_data includes detail and fixSuggestion when present."""
@@ -1476,27 +1550,22 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.assertIn("entity", result)
         self.assertEqual(result["entity"]["label"], "Unknown service")
 
-    @mock_with_header_auth
-    def test_get_event_with_object_without_to_dict(self):
-        """Test get_event with an object that doesn't have to_dict method."""
-
-        class CustomObject:
-            def __init__(self):
-                self.eventId = "test-123"
-                self.type = "incident"
-                self.problem = "Test problem"
-                self.start = 1000000
-                self.end = 2000000
-                self.state = "closed"
-                self.entityLabel = "test-entity"
-                self.entityType = "service"
-
-        self.events_api.get_event.return_value = CustomObject()
-
-        result = asyncio.run(self.client.get_event(event_id="test-123"))
-
-        self.assertIn("eventId", result)
-        self.assertEqual(result["eventId"], "test-123")
+    def test_optimize_event_data_with_string_metrics(self):
+        """Test _optimize_event_data handles metrics returned as plain strings (live API shape)."""
+        event = {
+            "eventId": "test-123",
+            "type": "incident",
+            "state": "closed",
+            "problem": "High error rate",
+            "start": 1000000,
+            "end": 2000000,
+            "entityLabel": "my-service",
+            "entityType": "service",
+            "metrics": ["errors", "latency"],
+        }
+        result = self.client._optimize_event_data(event)
+        self.assertIn("affectedMetrics", result)
+        self.assertEqual(result["affectedMetrics"], ["errors", "latency"])
 
     def test_build_time_params_with_invalid_time_range(self):
         """Test _build_time_params with invalid time_range falls back to defaults."""
@@ -2177,4 +2246,3 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
