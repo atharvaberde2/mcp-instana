@@ -286,7 +286,6 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
 
     def _calculate_age(self, start_ms: int) -> str:
         """Calculate human-readable age from start timestamp to now."""
-        from datetime import datetime
         current_time_ms = int(datetime.now().timestamp() * 1000)
         age_ms = current_time_ms - start_ms
         age_seconds = age_ms / 1000
@@ -997,14 +996,12 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
 
             result = self._parse_events_response(response_data)
 
-            filtered_events = self._apply_event_filters(result, extracted)
-
-            optimized = self._optimize_and_limit(filtered_events, extracted["max_events"])
+            optimized = self._optimize_and_limit(result, extracted, extracted["max_events"])
 
             return {
                 "events": optimized,
                 "events_returned": len(optimized),
-                "total_events": len(filtered_events),
+                "total_events": len(result),
                 "time_range": time_params.get("human_readable", "N/A")
             }
 
@@ -1081,17 +1078,12 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
             return []
 
         return result
-
-    def _apply_event_filters(self, events, f):
-        """Apply filters to events with reduced cognitive complexity."""
-        # Early return if no filters are specified
-        if not any([
+    def _has_active_filters(self, f):
+        """Return True if any post-API filter is active."""
+        return any([
             f["entity_type"], f["state"], f["entity_name"], f["entity_label"],
             f["problem"], f["severity"], f["query"], f["rca"] is not None
-        ]):
-            return events
-
-        return [e for e in events if self._event_matches_filters(e, f)]
+        ])
 
     def _event_matches_filters(self, event, f):
         """Check if an event matches all provided filters using early returns."""
@@ -1167,10 +1159,17 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
         # If rca is True, return events where probableCause.found is True
         # If rca is False, return events where probableCause.found is False or missing
         return has_rca == rca
-
-    def _optimize_and_limit(self, events, max_events):
-        limited = events[:max_events]
-        return [self._optimize_event_data(e) for e in limited]
+    def _optimize_and_limit(self, events, f, max_events):
+        """Filter, optimize, and limit events in a single pass — avoids building an intermediate filtered list."""
+        has_filters = self._has_active_filters(f)
+        result = []
+        for event in events:
+            if len(result) >= max_events:
+                break
+            if has_filters and not self._event_matches_filters(event, f):
+                continue
+            result.append(self._optimize_event_data(event))
+        return result
 
     @with_header_auth(EventsApi)
     async def get_events_by_ids(

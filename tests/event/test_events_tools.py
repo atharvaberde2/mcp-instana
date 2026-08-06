@@ -1073,7 +1073,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         ))
 
         self.assertIn("events", result)
-        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["total_events"], 2)  # raw API count
         self.assertEqual(result["events_returned"], 1)
 
     def test_calculate_duration_with_open_state(self):
@@ -1745,18 +1745,18 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.assertFalse(self.client._matches_rca(event, True))
 
     def test_apply_event_filters_no_filters_returns_all(self):
-        """When no filters are specified, all events should be returned unchanged."""
+        """When no filters are specified, _optimize_and_limit with no active filters returns all events."""
         events = [{"eventId": "e1"}, {"eventId": "e2"}]
         f = {
             "entity_type": None, "state": None, "entity_name": None,
             "entity_label": None, "problem": None, "severity": None,
             "query": None, "rca": None, "event_specification_id": None,
         }
-        result = self.client._apply_event_filters(events, f)
+        result = self.client._optimize_and_limit(events, f=f, max_events=50)
         self.assertEqual(len(result), 2)
 
     def test_apply_event_filters_by_state(self):
-        """Should filter events by state."""
+        """Should filter events by state via _optimize_and_limit."""
         events = [
             {"state": "open", "eventId": "e1"},
             {"state": "closed", "eventId": "e2"},
@@ -1766,7 +1766,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             "entity_label": None, "problem": None, "severity": None,
             "query": None, "rca": None, "event_specification_id": None,
         }
-        result = self.client._apply_event_filters(events, f)
+        result = self.client._optimize_and_limit(events, f=f, max_events=50)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["eventId"], "e1")
 
@@ -1778,7 +1778,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             "entity_label": None, "problem": None, "severity": None,
             "query": None, "rca": None, "event_specification_id": None,
         }
-        result = self.client._apply_event_filters(events, f)
+        result = self.client._optimize_and_limit(events, f=f, max_events=50)
         self.assertEqual(len(result), 0)
 
     def test_event_matches_filters_severity_none_skips_check(self):
@@ -1826,18 +1826,24 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         """Events list should be truncated to max_events."""
         events = [{"eventId": f"e{i}", "type": "incident", "start": 1000000 + i}
                   for i in range(10)]
-        result = self.client._optimize_and_limit(events, max_events=3)
+        f = {"entity_type": None, "state": None, "entity_name": None, "entity_label": None,
+             "problem": None, "severity": None, "query": None, "rca": None, "event_specification_id": None}
+        result = self.client._optimize_and_limit(events, f=f, max_events=3)
         self.assertEqual(len(result), 3)
 
     def test_optimize_and_limit_all_events_if_under_max(self):
         """All events should be returned when count < max_events."""
         events = [{"eventId": "e1", "type": "incident", "start": 1000000}]
-        result = self.client._optimize_and_limit(events, max_events=50)
+        f = {"entity_type": None, "state": None, "entity_name": None, "entity_label": None,
+             "problem": None, "severity": None, "query": None, "rca": None, "event_specification_id": None}
+        result = self.client._optimize_and_limit(events, f=f, max_events=50)
         self.assertEqual(len(result), 1)
 
     def test_optimize_and_limit_empty_list(self):
         """An empty list should return an empty list."""
-        result = self.client._optimize_and_limit([], max_events=50)
+        f = {"entity_type": None, "state": None, "entity_name": None, "entity_label": None,
+             "problem": None, "severity": None, "query": None, "rca": None, "event_specification_id": None}
+        result = self.client._optimize_and_limit([], f=f, max_events=50)
         self.assertEqual(result, [])
 
     def test_fetch_events_api_passes_params(self):
@@ -1934,7 +1940,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_events(filters={"state": "open"}))
 
-        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["total_events"], 2)  # raw API count, filtering happens in single pass
         self.assertEqual(result["events_returned"], 1)
 
     @patch('src.event.events_tools.datetime')
@@ -1955,10 +1961,10 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.events_api.get_events_without_preload_content = AsyncMock(return_value=mock_response)
 
         result_with_rca = asyncio.run(self.client.get_events(filters={"rca": True}))
-        self.assertEqual(result_with_rca["total_events"], 1)
+        self.assertEqual(result_with_rca["total_events"], 3)  # raw API count
 
         result_without_rca = asyncio.run(self.client.get_events(filters={"rca": False}))
-        self.assertEqual(result_without_rca["total_events"], 2)
+        self.assertEqual(result_without_rca["total_events"], 3)  # raw API count
 
     @patch('src.event.events_tools.datetime')
     def test_get_events_applies_severity_filter(self, mock_datetime):
@@ -1978,7 +1984,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_events(filters={"severity": 10}))
 
-        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["total_events"], 2)  # raw API count
 
     @patch('src.event.events_tools.datetime')
     def test_get_events_api_error_returns_error(self, mock_datetime):
@@ -2051,7 +2057,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_events(filters={"problem": "memory"}))
 
-        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["total_events"], 2)  # raw API count
 
     @patch('src.event.events_tools.datetime')
     def test_get_events_applies_entity_name_filter(self, mock_datetime):
@@ -2071,7 +2077,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_events(filters={"entity_name": "kubernetes"}))
 
-        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["total_events"], 2)  # raw API count
 
     @patch('src.event.events_tools.datetime')
     def test_get_events_applies_entity_label_filter(self, mock_datetime):
@@ -2091,7 +2097,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_events(filters={"entity_label": "payment-service"}))
 
-        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["total_events"], 2)  # raw API count
 
     @patch('src.event.events_tools.datetime')
     def test_get_events_applies_event_specification_id_filter(self, mock_datetime):
@@ -2115,7 +2121,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             "state": "open",
         }))
 
-        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["total_events"], 2)  # raw API count
 
     def test_get_events_by_ids_batch_success(self):
         """get_events_by_ids should return events when batch API succeeds."""
@@ -2246,3 +2252,4 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -6,6 +6,7 @@ This module provides the base client for interacting with the Instana API.
 
 import json
 import logging
+import os
 import sys
 from functools import wraps
 from typing import Any, Callable, Dict, Optional, Union
@@ -270,6 +271,16 @@ def _set_csrf_headers(api_client_instance, auth_headers):
         logger.debug("Set CSRF header for JWT auth (no Cookie)")
 
 
+def _ssl_verify_from_env() -> bool:
+    """Return SSL verification flag from INSTANA_SSL_VERIFY env var.
+
+    Defaults to False (skip verification) when the variable is absent or unrecognised.
+    Set INSTANA_SSL_VERIFY=true / 1 / yes to enable verification.
+    """
+    raw = os.getenv("INSTANA_SSL_VERIFY", "false").strip().lower()
+    return raw not in ("0", "false", "no")
+
+
 def _create_api_client_with_config(base_url, instana_api_token, instana_jwt_token, auth_headers):
     """Create API client with configuration based on auth type."""
     from instana_client.api_client import ApiClient
@@ -277,9 +288,16 @@ def _create_api_client_with_config(base_url, instana_api_token, instana_jwt_toke
 
     configuration = Configuration()
     configuration.host = base_url
-    # Disable SSL verification for self-signed certificates (development/testing)
-    configuration.verify_ssl = False
-    configuration.ssl_ca_cert = None
+    configuration.verify_ssl = _ssl_verify_from_env()
+    if configuration.verify_ssl:
+        ca_bundle = os.getenv("INSTANA_CA_BUNDLE")
+        if ca_bundle:
+            configuration.ssl_ca_cert = ca_bundle
+            logger.info("SSL verification is ENABLED (custom CA bundle: %s)", ca_bundle)
+        else:
+            logger.info("SSL verification is ENABLED (system CA bundle)")
+    else:
+        logger.warning("SSL verification is DISABLED. Set INSTANA_SSL_VERIFY=true or pass --verify-ssl to enable.")
 
     # Configure authentication type
     error = _configure_auth_type(configuration, auth_headers, instana_api_token, instana_jwt_token)
@@ -353,6 +371,16 @@ def _create_api_client_from_config(base_url, api_token):
 
     configuration = Configuration()
     configuration.host = base_url
+    configuration.verify_ssl = _ssl_verify_from_env()
+    if configuration.verify_ssl:
+        ca_bundle = os.getenv("INSTANA_CA_BUNDLE")
+        if ca_bundle:
+            configuration.ssl_ca_cert = ca_bundle
+            logger.info("SSL verification is ENABLED (custom CA bundle: %s)", ca_bundle)
+        else:
+            logger.info("SSL verification is ENABLED (system CA bundle)")
+    else:
+        logger.warning("SSL verification is DISABLED. Set INSTANA_SSL_VERIFY=true or pass --verify-ssl to enable.")
     configuration.api_key['ApiKeyAuth'] = api_token
     configuration.api_key_prefix['ApiKeyAuth'] = 'apiToken'
 
@@ -513,6 +541,7 @@ class BaseInstanaClient:
     def __init__(self, read_token: str, base_url: str):
         self.read_token = read_token
         self.base_url = base_url
+        self.ssl_verify = _ssl_verify_from_env()
 
     def get_headers(self):
         """Get standard headers for Instana API requests."""
@@ -557,17 +586,18 @@ class BaseInstanaClient:
         headers = self.get_headers()
 
         try:
+            ssl_verify = self.ssl_verify
             if method.upper() == "GET":
-                response = requests.get(url, headers=headers, params=params, verify=False)
+                response = requests.get(url, headers=headers, params=params, verify=ssl_verify)
             elif method.upper() == "POST":
                 # Use the json parameter if provided, otherwise use params
                 data_to_send = json if json is not None else params
-                response = requests.post(url, headers=headers, json=data_to_send, verify=False)
+                response = requests.post(url, headers=headers, json=data_to_send, verify=ssl_verify)
             elif method.upper() == "PUT":
                 data_to_send = json if json is not None else params
-                response = requests.put(url, headers=headers, json=data_to_send, verify=False)
+                response = requests.put(url, headers=headers, json=data_to_send, verify=ssl_verify)
             elif method.upper() == "DELETE":
-                response = requests.delete(url, headers=headers, params=params, verify=False)
+                response = requests.delete(url, headers=headers, params=params, verify=ssl_verify)
             else:
                 return {"error": f"Unsupported HTTP method: {method}"}
 

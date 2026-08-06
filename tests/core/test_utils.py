@@ -174,6 +174,12 @@ class TestBaseInstanaClient(unittest.TestCase):
         self.read_token = "test_token"
         self.base_url = "https://test.instana.io"
         self.client = BaseInstanaClient(read_token=self.read_token, base_url=self.base_url)
+        # Patch SSL verify to False so tests reflect disabled-SSL behaviour
+        self._ssl_patch = patch('src.core.utils._ssl_verify_from_env', return_value=False)
+        self._ssl_patch.start()
+
+    def tearDown(self):
+        self._ssl_patch.stop()
 
     def test_init(self):
         """Test that the client is initialized with the correct values"""

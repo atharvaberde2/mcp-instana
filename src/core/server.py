@@ -66,7 +66,7 @@ if project_root not in sys.path:
 
 # Import the necessary modules
 try:
-    from src.core.utils import MCP_TOOLS, register_as_tool
+    from src.core.utils import MCP_TOOLS, _ssl_verify_from_env, register_as_tool
 except ImportError:
     logger.error("Failed to import required modules", exc_info=True)
     sys.exit(1)
@@ -482,6 +482,12 @@ def main():
             type=str,
             help="Instana base URL (overrides INSTANA_BASE_URL env var)"
         )
+        parser.add_argument(
+            "--verify-ssl",
+            action="store_true",
+            default=False,
+            help="Enable SSL certificate verification. Equivalent to INSTANA_SSL_VERIFY=true."
+        )
         # Check for help arguments before parsing
         if len(sys.argv) > 1 and any(arg in ['-h','--h','--help','-help'] for arg in sys.argv[1:]):
             # Check if help is combined with other arguments
@@ -571,10 +577,20 @@ def main():
         INSTANA_API_TOKEN = args.api_token if args.api_token else os.getenv("INSTANA_API_TOKEN", "")
         INSTANA_BASE_URL = args.base_url if args.base_url else os.getenv("INSTANA_BASE_URL", "")
 
+        # --verify-ssl flag overrides INSTANA_SSL_VERIFY env var
+        if args.verify_ssl:
+            os.environ["INSTANA_SSL_VERIFY"] = "true"
+
         if args.transport == "stdio" or args.transport is None:
             if not validate_credentials(INSTANA_API_TOKEN, INSTANA_BASE_URL):
                 logger.error("Error: Instana credentials are required for stdio mode but not provided. Please set INSTANA_API_TOKEN and INSTANA_BASE_URL environment variables.")
                 sys.exit(1)
+
+        # Log SSL verification state at startup so it's always visible
+        if _ssl_verify_from_env():
+            logger.info("SSL verification is ENABLED")
+        else:
+            logger.warning("SSL verification is DISABLED. Set INSTANA_SSL_VERIFY=true or pass --verify-ssl to enable.")
 
         # Create and configure the MCP server
         try:
