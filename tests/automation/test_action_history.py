@@ -151,8 +151,8 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("payload is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("payload is required", (result.get("error") or result.get("message", "")))
 
     def test_submit_automation_action_string_payload(self):
         """Test submit_automation_action with string payload"""
@@ -201,7 +201,7 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_submit_automation_action_missing_required_field(self):
         """Test submit_automation_action with missing required field"""
@@ -214,8 +214,8 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error about missing field
-        self.assertIn("error", result)
-        self.assertIn("hostId", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("hostId", (result.get("error") or result.get("message", "")))
 
     def test_submit_automation_action_missing_action_id(self):
         """Test submit_automation_action with missing actionId field"""
@@ -228,8 +228,8 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error about missing field
-        self.assertIn("error", result)
-        self.assertIn("actionId", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("actionId", (result.get("error") or result.get("message", "")))
 
     def test_submit_automation_action_with_optional_fields(self):
         """Test submit_automation_action with optional fields"""
@@ -272,7 +272,7 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_submit_automation_action_no_to_dict(self):
         """Test submit_automation_action when response has no to_dict method"""
@@ -353,8 +353,8 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("action_instance_id is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("action_instance_id is required", (result.get("error") or result.get("message", "")))
 
     def test_get_action_instance_details_error_handling(self):
         """Test error handling in get_action_instance_details"""
@@ -367,7 +367,7 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_instance_details_no_to_dict(self):
         """Test get_action_instance_details when response has no to_dict method"""
@@ -459,7 +459,7 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_list_action_instances_no_to_dict(self):
         """Test list_action_instances when response has no to_dict method"""
@@ -512,8 +512,8 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("action_instance_id is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("action_instance_id is required", (result.get("error") or result.get("message", "")))
 
     def test_delete_action_instance_missing_from_time(self):
         """Test delete_action_instance with missing from_time"""
@@ -525,8 +525,8 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("from_time is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("from_time is required", (result.get("error") or result.get("message", "")))
 
     def test_delete_action_instance_missing_to_time(self):
         """Test delete_action_instance with missing to_time"""
@@ -538,8 +538,8 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("to_time is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("to_time is required", (result.get("error") or result.get("message", "")))
 
     def test_delete_action_instance_error_handling(self):
         """Test error handling in delete_action_instance"""
@@ -554,7 +554,7 @@ class TestActionHistoryMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_delete_action_instance_no_to_dict(self):
         """Test delete_action_instance when response has no to_dict method"""

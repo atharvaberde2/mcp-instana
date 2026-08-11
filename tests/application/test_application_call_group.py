@@ -475,7 +475,7 @@ class TestApplicationCallGroupMCPTools(unittest.TestCase):
             metrics=[{"metric": "calls", "aggregation": "SUM"}],
             time_frame={"windowSize": 3600000},
             group={"groupbyTag": "service.name", "groupbyTagEntity": "DESTINATION"},
-            tag_filter_expression={"type": "EXPRESSION"},
+            tag_filter_expression={"type": "EXPRESSION", "logicalOperator": "AND", "elements": []},
             include_internal=True,
             include_synthetic=True,
             order={"by": "calls", "direction": "DESC"},

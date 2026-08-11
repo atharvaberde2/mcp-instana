@@ -13,7 +13,7 @@ from mcp.types import ToolAnnotations
 
 from src.core.timestamp_utils import convert_datetime_params
 from src.core.utils import BaseInstanaClient, register_as_tool
-from src.core.validation import EventsValidator, TimeValidator
+from src.core.validation import BooleanCoercer, EventsValidator, TimeValidator
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,10 @@ PARAM_RCA = "rca"
 # Default values
 DEFAULT_MAX_EVENTS = 50
 
+_VALID_SEVERITIES = frozenset({-1, 5, 10})
+_VALID_EVENT_TYPES = frozenset({"INCIDENT", "ISSUE", "CHANGE"})
+
+
 class EventsSmartRouterMCPTool(BaseInstanaClient):
     """
     Smart router for events monitoring operations.
@@ -79,6 +83,176 @@ class EventsSmartRouterMCPTool(BaseInstanaClient):
         self.events_client = AgentMonitoringEventsMCPTools(read_token, base_url)
 
         logger.info("Smart Router Events initialized")
+
+    @staticmethod
+    def _extract_event_filters_from_params(operation: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract the unified filters dict from raw params, handling get_events nesting."""
+        source = params.get("filters", {}) if operation == OPERATION_GET_EVENTS else params
+        return {
+            PARAM_EVENT_ID: source.get(PARAM_EVENT_ID),
+            PARAM_EVENT_IDS: source.get(PARAM_EVENT_IDS),
+            PARAM_FROM_TIME: source.get(PARAM_FROM_TIME),
+            PARAM_TO_TIME: source.get(PARAM_TO_TIME),
+            PARAM_TIME_RANGE: source.get(PARAM_TIME_RANGE),
+            PARAM_QUERY: source.get(PARAM_QUERY),
+            PARAM_MAX_EVENTS: source.get(PARAM_MAX_EVENTS, DEFAULT_MAX_EVENTS),
+            PARAM_FILTER_EVENT_UPDATES: source.get(PARAM_FILTER_EVENT_UPDATES),
+            PARAM_EXCLUDE_TRIGGERED_BEFORE: source.get(PARAM_EXCLUDE_TRIGGERED_BEFORE),
+            PARAM_EVENT_TYPE_FILTERS: source.get(PARAM_EVENT_TYPE_FILTERS),
+            PARAM_ENTITY_TYPE: source.get(PARAM_ENTITY_TYPE),
+            PARAM_ENTITY_NAME: source.get(PARAM_ENTITY_NAME),
+            PARAM_ENTITY_LABEL: source.get(PARAM_ENTITY_LABEL),
+            PARAM_STATE: source.get(PARAM_STATE),
+            PARAM_PROBLEM: source.get(PARAM_PROBLEM),
+            PARAM_SEVERITY: source.get(PARAM_SEVERITY),
+            PARAM_EVENT_SPECIFICATION_ID: source.get(PARAM_EVENT_SPECIFICATION_ID),
+            PARAM_RCA: source.get(PARAM_RCA),
+        }
+
+    @staticmethod
+    def _preflight_events_operation(operation: str, filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Validate operation-specific required params; return elicitation dict or None."""
+        if operation == OPERATION_GET_EVENT:
+            if not filters[PARAM_EVENT_ID] or not str(filters[PARAM_EVENT_ID]).strip():
+                return {
+                    "elicitation_needed": True,
+                    "reason": "get_event: event_id is required",
+                    "api_error": ["event_id: required — provide the event ID string (obtain one from get_events or get_events_by_ids)"],
+                    "message": "event_id is required for 'get_event'. Obtain one from the 'get_events' operation first.",
+                }
+
+        if operation == OPERATION_GET_EVENTS_BY_IDS:
+            raw_ids = filters[PARAM_EVENT_IDS]
+            if not raw_ids or (isinstance(raw_ids, list) and len(raw_ids) == 0):
+                return {
+                    "elicitation_needed": True,
+                    "reason": "get_events_by_ids: event_ids is required",
+                    "api_error": ['event_ids: required — provide a list of event ID strings. Example: ["1a2b3c4d5e6f", "7g8h9i0j1k2l"]'],
+                    "message": 'event_ids is required for \'get_events_by_ids\'. Example: {"event_ids": ["1a2b3c4d5e6f", "7g8h9i0j1k2l"]}',
+                }
+
+        if operation == OPERATION_GET_EVENTS:
+            return EventsSmartRouterMCPTool._validate_get_events_filters(filters)
+
+        return None
+
+    @staticmethod
+    def _validate_get_events_filters(filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Validate get_events-specific filter fields; mutates bool flags in-place. Returns elicitation dict or None."""
+        errors: list = []
+
+        severity = filters[PARAM_SEVERITY]
+        if severity is not None and severity not in _VALID_SEVERITIES:
+            errors.append(
+                f"filters.severity: {severity!r} is not valid. "
+                "Allowed values: -1 (change/informational), 5 (warning), 10 (critical)"
+            )
+
+        event_type_filters = filters[PARAM_EVENT_TYPE_FILTERS]
+        if event_type_filters is not None:
+            if not isinstance(event_type_filters, list):
+                errors.append("filters.event_type_filters: must be a list. " 'Example: ["INCIDENT", "ISSUE"]')
+            else:
+                for i, et in enumerate(event_type_filters):
+                    if not isinstance(et, str) or et.upper() not in _VALID_EVENT_TYPES:
+                        errors.append(f"filters.event_type_filters[{i}]: {et!r} is not valid. Must be one of: {sorted(_VALID_EVENT_TYPES)}")
+
+        max_events = filters[PARAM_MAX_EVENTS]
+        if max_events is not None:
+            if not isinstance(max_events, int):
+                errors.append(f"filters.max_events: must be an integer, got {type(max_events).__name__!r}")
+            elif max_events < 1 or max_events > 1000:
+                errors.append(f"filters.max_events: {max_events} is out of range. Must be 1-1000")
+
+        for flag in (PARAM_FILTER_EVENT_UPDATES, PARAM_EXCLUDE_TRIGGERED_BEFORE):
+            raw = filters[flag]
+            if raw is not None:
+                coerced = BooleanCoercer.coerce(raw)
+                if coerced is None:
+                    errors.append(f"filters.{flag}: {raw!r} cannot be interpreted as a boolean. Use true or false")
+                else:
+                    filters[flag] = coerced
+
+        if not errors:
+            return None
+        return {
+            "elicitation_needed": True,
+            "reason": f"get_events filters have {len(errors)} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The get_events filters have {len(errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    def _validate_time_and_max_events(
+        self,
+        operation: str,
+        filters: Dict[str, Any],
+        from_time: Any,
+        to_time: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Validate time params and max_events for time-requiring operations; return error dict or None."""
+        logger.debug(f"[manage_events] Validating time parameters for operation: {operation}")
+        time_validation = TimeValidator.validate_time_parameters(
+            from_time=from_time,
+            to_time=to_time,
+            time_range=filters[PARAM_TIME_RANGE],
+        )
+        if not time_validation.is_valid():
+            logger.warning(f"[manage_events] Time parameter validation failed for operation: {operation}, errors: {time_validation.to_dict()}")
+            return {"operation": operation, "validation_failed": True, **time_validation.to_dict()}
+
+        max_events_error = EventsValidator.validate_max_events(filters[PARAM_MAX_EVENTS])
+        if max_events_error:
+            logger.warning(f"[manage_events] max_events validation failed: {max_events_error.message}, provided value: {filters[PARAM_MAX_EVENTS]}")
+            return {
+                "operation": operation,
+                "validation_failed": True,
+                "valid": False,
+                "error_count": 1,
+                "errors": [max_events_error.to_dict()],
+                "message": "Parameter validation failed. Please correct the following fields and try again.",
+            }
+        return None
+
+    async def _dispatch_events_operation(
+        self,
+        operation: str,
+        filters: Dict[str, Any],
+        from_time: Any,
+        to_time: Any,
+        ctx: Any,
+    ) -> Dict[str, Any]:
+        """Route a validated events operation to the appropriate client method."""
+        if operation == OPERATION_GET_EVENT:
+            return await self.events_client.get_event(event_id=filters[PARAM_EVENT_ID], ctx=ctx)
+        if operation == OPERATION_GET_KUBERNETES_INFO_EVENTS:
+            return await self.events_client.get_kubernetes_info_events(
+                from_time=from_time, to_time=to_time,
+                time_range=filters[PARAM_TIME_RANGE], max_events=filters[PARAM_MAX_EVENTS], ctx=ctx,
+            )
+        if operation == OPERATION_GET_AGENT_MONITORING_EVENTS:
+            return await self.events_client.get_agent_monitoring_events(
+                query=filters[PARAM_QUERY], from_time=from_time, to_time=to_time,
+                max_events=filters[PARAM_MAX_EVENTS], time_range=filters[PARAM_TIME_RANGE], ctx=ctx,
+            )
+        if operation == OPERATION_GET_EVENTS:
+            return await self.events_client.get_events(filters={
+                "query": filters[PARAM_QUERY], "from_time": from_time, "to_time": to_time,
+                "filter_event_updates": filters[PARAM_FILTER_EVENT_UPDATES],
+                "exclude_triggered_before": filters[PARAM_EXCLUDE_TRIGGERED_BEFORE],
+                "max_events": filters[PARAM_MAX_EVENTS], "time_range": filters[PARAM_TIME_RANGE],
+                "event_type_filters": filters[PARAM_EVENT_TYPE_FILTERS],
+                "entity_type": filters[PARAM_ENTITY_TYPE], "entity_name": filters[PARAM_ENTITY_NAME],
+                "entity_label": filters[PARAM_ENTITY_LABEL], "state": filters[PARAM_STATE],
+                "problem": filters[PARAM_PROBLEM], "severity": filters[PARAM_SEVERITY],
+                "event_specification_id": filters[PARAM_EVENT_SPECIFICATION_ID], "rca": filters[PARAM_RCA],
+            }, ctx=ctx)
+        if operation == OPERATION_GET_EVENTS_BY_IDS:
+            return await self.events_client.get_events_by_ids(event_ids=filters[PARAM_EVENT_IDS], ctx=ctx)
+        return {"error": f"Unrouted operation '{operation}'", "operation": operation}
 
     @register_as_tool(
         title="Manage Instana Events Resources",
@@ -112,8 +286,8 @@ Parameters (params dict):
         - time_range: Natural language time range like "last 24 hours", "last 2 days"
         - query: Optional query string
         - max_events: Maximum number of events to process for analysis (optional, default 50)
-        - filter_event_updates: Boolean flag to filter results to only show events with state changes within timeframe (optional)
-        - exclude_triggered_before: Boolean flag to exclude events triggered before the timeframe (optional)
+        - filter_event_updates: Boolean flag to filter results to only show events with state changes within timeframe (optional, default True)
+        - exclude_triggered_before: Boolean flag to exclude events triggered before the timeframe (optional, default True)
             NOTE: This is a boolean flag, not a timestamp
         - event_type_filters: List of event type filters (optional, e.g., ["INCIDENT", "ISSUE", "CHANGE"]).
             NOTE: Allowed values: INCIDENT, ISSUE, CHANGE. Invalid values will result in an error.
@@ -163,183 +337,55 @@ Examples:
         """Unified Instana events resource manager for events monitoring operations."""
         try:
             logger.debug(f"[manage_events] Received operation: {operation}")
+            params = params or {}
 
-            # Initialize params if not provided
-            if params is None:
-                params = {}
-
-            # Validate operation
             if operation not in EVENTS_VALID_OPERATIONS:
                 logger.warning(f"[manage_events] Invalid operation: {operation}")
                 return {
-                    "error": f"Invalid operation '{operation}'",
-                    "valid_operations": EVENTS_VALID_OPERATIONS
+                    "elicitation_needed": True,
+                    "reason": f"Invalid operation: {operation!r}",
+                    "api_error": [f"operation: {operation!r} is not valid for events. Must be one of: {EVENTS_VALID_OPERATIONS}"],
+                    "message": f"operation {operation!r} is not valid. Accepted values are: {EVENTS_VALID_OPERATIONS}.",
                 }
 
-            source_params = params.get("filters", {}) if operation == OPERATION_GET_EVENTS else params
+            filters = self._extract_event_filters_from_params(operation, params)
 
-            filters = {
-                PARAM_EVENT_ID: source_params.get(PARAM_EVENT_ID),
-                PARAM_EVENT_IDS: source_params.get(PARAM_EVENT_IDS),
-                PARAM_FROM_TIME: source_params.get(PARAM_FROM_TIME),
-                PARAM_TO_TIME: source_params.get(PARAM_TO_TIME),
-                PARAM_TIME_RANGE: source_params.get(PARAM_TIME_RANGE),
-                PARAM_QUERY: source_params.get(PARAM_QUERY),
-                PARAM_MAX_EVENTS: source_params.get(PARAM_MAX_EVENTS, DEFAULT_MAX_EVENTS),
-                PARAM_FILTER_EVENT_UPDATES: source_params.get(PARAM_FILTER_EVENT_UPDATES),
-                PARAM_EXCLUDE_TRIGGERED_BEFORE: source_params.get(PARAM_EXCLUDE_TRIGGERED_BEFORE),
-                PARAM_EVENT_TYPE_FILTERS: source_params.get(PARAM_EVENT_TYPE_FILTERS),
-                PARAM_ENTITY_TYPE: source_params.get(PARAM_ENTITY_TYPE),
-                PARAM_ENTITY_NAME: source_params.get(PARAM_ENTITY_NAME),
-                PARAM_ENTITY_LABEL: source_params.get(PARAM_ENTITY_LABEL),
-                PARAM_STATE: source_params.get(PARAM_STATE),
-                PARAM_PROBLEM: source_params.get(PARAM_PROBLEM),
-                PARAM_SEVERITY: source_params.get(PARAM_SEVERITY),
-                PARAM_EVENT_SPECIFICATION_ID: source_params.get(PARAM_EVENT_SPECIFICATION_ID),
-                PARAM_RCA: source_params.get(PARAM_RCA),
-            }
+            preflight = self._preflight_events_operation(operation, filters)
+            if preflight:
+                return preflight
 
-            logger.debug(
-                f"[manage_events] Parameters extracted - "
-                f"operation: {operation}, time_range: {filters[PARAM_TIME_RANGE]}, "
-                f"from_time: {filters[PARAM_FROM_TIME]}, to_time: {filters[PARAM_TO_TIME]}, max_events: {filters[PARAM_MAX_EVENTS]}, "
-                f"event_type_filters: {filters[PARAM_EVENT_TYPE_FILTERS]}, entity_type: {filters[PARAM_ENTITY_TYPE]}, entity_name: {filters[PARAM_ENTITY_NAME]}, entity_label: {filters[PARAM_ENTITY_LABEL]}, state: {filters[PARAM_STATE]}, problem: {filters[PARAM_PROBLEM]}, severity: {filters[PARAM_SEVERITY]}, rca: {filters[PARAM_RCA]}"
-            )
-
-            # Convert datetime strings to timestamps for from_time and to_time
             conversion_result = convert_datetime_params(
                 {PARAM_FROM_TIME: filters[PARAM_FROM_TIME], PARAM_TO_TIME: filters[PARAM_TO_TIME]},
                 [PARAM_FROM_TIME, PARAM_TO_TIME],
-                default_timezone="UTC"
+                default_timezone="UTC",
             )
-
             if "error" in conversion_result:
                 return {
-                    "error": conversion_result["error"],
-                    "operation": operation
+                    "elicitation_needed": True,
+                    "reason": "datetime conversion failed for from_time or to_time",
+                    "api_error": [conversion_result["error"]],
+                    "message": (
+                        "Could not parse the provided datetime value. "
+                        "Use a Unix timestamp in milliseconds or a datetime string "
+                        'like "19 March 2026, 2:47 PM|IST".\n'
+                        f"  - {conversion_result['error']}"
+                    ),
                 }
 
-            # Update the converted values
             from_time = conversion_result["params"][PARAM_FROM_TIME]
             to_time = conversion_result["params"][PARAM_TO_TIME]
 
-            # Validate time-related parameters for operations that use them
             if operation in TIME_REQUIRED_OPERATIONS:
-                logger.debug(f"[manage_events] Validating time parameters for operation: {operation}")
+                time_error = self._validate_time_and_max_events(operation, filters, from_time, to_time)
+                if time_error:
+                    return time_error
 
-                # Validate time parameters
-                time_validation = TimeValidator.validate_time_parameters(
-                    from_time=from_time,
-                    to_time=to_time,
-                    time_range=filters[PARAM_TIME_RANGE]
-                )
-
-                if not time_validation.is_valid():
-                    logger.warning(
-                        f"[manage_events] Time parameter validation failed for operation: {operation}, "
-                        f"errors: {time_validation.to_dict()}"
-                    )
-                    return {
-                        "operation": operation,
-                        "validation_failed": True,
-                        **time_validation.to_dict()
-                    }
-
-                # Validate max_events
-                max_events_error = EventsValidator.validate_max_events(filters[PARAM_MAX_EVENTS])
-                if max_events_error:
-                    logger.warning(
-                        f"[manage_events] max_events validation failed: {max_events_error.message}, "
-                        f"provided value: {filters[PARAM_MAX_EVENTS]}"
-                    )
-                    return {
-                        "operation": operation,
-                        "validation_failed": True,
-                        "valid": False,
-                        "error_count": 1,
-                        "errors": [max_events_error.to_dict()],
-                        "message": "Parameter validation failed. Please correct the following fields and try again."
-                    }
-
-            # Route to the events client
             logger.debug(f"[manage_events] Routing to Events client for operation: {operation}")
-
-            if operation == OPERATION_GET_EVENT:
-                result = await self.events_client.get_event(
-                    event_id=filters[PARAM_EVENT_ID],
-                    ctx=ctx
-                )
-
-            elif operation == OPERATION_GET_KUBERNETES_INFO_EVENTS:
-                result = await self.events_client.get_kubernetes_info_events(
-                    from_time=from_time,
-                    to_time=to_time,
-                    time_range=filters[PARAM_TIME_RANGE],
-                    max_events=filters[PARAM_MAX_EVENTS],
-                    ctx=ctx
-                )
-
-            elif operation == OPERATION_GET_AGENT_MONITORING_EVENTS:
-                result = await self.events_client.get_agent_monitoring_events(
-                    query=filters[PARAM_QUERY],
-                    from_time=from_time,
-                    to_time=to_time,
-                    max_events=filters[PARAM_MAX_EVENTS],
-                    time_range=filters[PARAM_TIME_RANGE],
-                    ctx=ctx
-                )
-
-            elif operation == OPERATION_GET_EVENTS:
-                event_filters = {
-                    "query": filters[PARAM_QUERY],
-                    "from_time": from_time,
-                    "to_time": to_time,
-                    "filter_event_updates": filters[PARAM_FILTER_EVENT_UPDATES],
-                    "exclude_triggered_before": filters[PARAM_EXCLUDE_TRIGGERED_BEFORE],
-                    "max_events": filters[PARAM_MAX_EVENTS],
-                    "time_range": filters[PARAM_TIME_RANGE],
-                    "event_type_filters": filters[PARAM_EVENT_TYPE_FILTERS],
-                    "entity_type": filters[PARAM_ENTITY_TYPE],
-                    "entity_name": filters[PARAM_ENTITY_NAME],
-                    "entity_label": filters[PARAM_ENTITY_LABEL],
-                    "state": filters[PARAM_STATE],
-                    "problem": filters[PARAM_PROBLEM],
-                    "severity": filters[PARAM_SEVERITY],
-                    "event_specification_id": filters[PARAM_EVENT_SPECIFICATION_ID],
-                    "rca": filters[PARAM_RCA],
-                }
-
-                result = await self.events_client.get_events(
-                    filters=event_filters,
-                    ctx=ctx
-                )
-
-
-            elif operation == OPERATION_GET_EVENTS_BY_IDS:
-                result = await self.events_client.get_events_by_ids(
-                    event_ids=filters[PARAM_EVENT_IDS],
-                    ctx=ctx
-                )
-
-            else:
-                return {
-                    "error": f"Unrouted operation '{operation}'",
-                    "operation": operation
-                }
+            result = await self._dispatch_events_operation(operation, filters, from_time, to_time, ctx)
 
             logger.debug(f"[manage_events] Successfully completed operation: {operation}")
-            return {
-                "operation": operation,
-                "results": result
-            }
+            return {"operation": operation, "results": result}
 
         except Exception as e:
-            logger.error(
-                f"[manage_events] Error processing operation: {operation}, "
-                f"error: {e!s}",
-                exc_info=True
-            )
-            return {
-                "error": f"Events smart router error: {e!s}",
-                "operation": operation
-            }
+            logger.error(f"[manage_events] Error processing operation: {operation}, error: {e!s}", exc_info=True)
+            return {"error": f"Events smart router error: {e!s}", "operation": operation}

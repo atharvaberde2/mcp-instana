@@ -63,7 +63,18 @@ class MobileAppAlertMCPTools(BaseInstanaClient):
 
             # Validate required parameters
             if not mobile_app_id:
-                return {"error": "mobile_app_id is required"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "mobile_app_id",
+                            "issue": "mobile_app_id is required for find_active_mobile_app_alert_configs",
+                            "hint": "Use resource_type='configuration', operation='get_all' to list available mobile app IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'mobile_app_id'. Use configuration/get_all to list available mobile app IDs."
+                }
 
             # Call the find_active_mobile_app_alert_configs_without_preload_content method from the SDK
             logger.debug(f"Calling find_active_mobile_app_alert_configs_without_preload_content with mobile_app_id={mobile_app_id}, alert_ids={alert_ids}")
@@ -101,7 +112,18 @@ class MobileAppAlertMCPTools(BaseInstanaClient):
 
             # Validate required parameters
             if not id:
-                return {"error": "id is required"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "id",
+                            "issue": "id is required for find_mobile_app_alert_config",
+                            "hint": "Use resource_type='alert', operation='find_active_mobile_app_alert_configs' to list available alert config IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'id'. Use alert/find_active_mobile_app_alert_configs to list available IDs."
+                }
 
             # Call the find_mobile_app_alert_config_without_preload_content method from the SDK
             # Using _without_preload_content to avoid SDK deserialization issues

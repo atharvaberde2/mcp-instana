@@ -63,7 +63,18 @@ class WebsiteAlertMCPTools(BaseInstanaClient):
 
             # Validate required parameters
             if not website_id:
-                return {"error": "website_id is required"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "website_id",
+                            "issue": "website_id is required for find_active_website_alert_configs",
+                            "hint": "Use resource_type='configuration', operation='get_all' to list available website IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'website_id'. Use configuration/get_all to list available website IDs."
+                }
 
             # Call the find_active_website_alert_configs_without_preload_content method from the SDK
             logger.debug(f"Calling find_active_website_alert_configs_without_preload_content with website_id={website_id}, alert_ids={alert_ids}")
@@ -101,7 +112,18 @@ class WebsiteAlertMCPTools(BaseInstanaClient):
 
             # Validate required parameters
             if not id:
-                return {"error": "id is required"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "id",
+                            "issue": "id is required for find_website_alert_config",
+                            "hint": "Use resource_type='alert', operation='find_active_website_alert_configs' to list available alert config IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'id'. Use alert/find_active_website_alert_configs to list available IDs."
+                }
 
             # Call the find_website_alert_config_without_preload_content method from the SDK
             # Using _without_preload_content to avoid SDK deserialization issues

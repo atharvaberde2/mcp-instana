@@ -30,12 +30,231 @@ except ImportError as e:
 # Configure logger for this module
 logger = logging.getLogger(__name__)
 
+# SDK-verified enum values
+_VALID_ACCESS_TYPES = {"READ", "READ_WRITE"}
+_VALID_RELATION_TYPES = {"USER", "API_TOKEN", "ROLE", "TEAM", "GLOBAL"}
+
+
 class CustomDashboardMCPTools(BaseInstanaClient):
     """Tools for custom dashboards in Instana MCP."""
 
     def __init__(self, read_token: str, base_url: str):
         """Initialize the Custom Dashboard MCP tools client."""
         super().__init__(read_token=read_token, base_url=base_url)
+
+    @staticmethod
+    def _validate_access_rule(rule: Any, idx: int, errors: list) -> None:
+        """Validate a single accessRule item; append problems to errors."""
+        if not isinstance(rule, dict):
+            errors.append(f"'accessRules[{idx}]' must be an object.")
+            return
+        access_type = rule.get("accessType")
+        if not access_type:
+            errors.append(
+                f"'accessRules[{idx}].accessType' is required. "
+                f"Must be one of: {sorted(_VALID_ACCESS_TYPES)}"
+            )
+        elif access_type not in _VALID_ACCESS_TYPES:
+            errors.append(
+                f"'accessRules[{idx}].accessType' is invalid: {access_type!r}. "
+                f"Must be one of: {sorted(_VALID_ACCESS_TYPES)}"
+            )
+        relation_type = rule.get("relationType")
+        if not relation_type:
+            errors.append(
+                f"'accessRules[{idx}].relationType' is required. "
+                f"Must be one of: {sorted(_VALID_RELATION_TYPES)}"
+            )
+        elif relation_type not in _VALID_RELATION_TYPES:
+            errors.append(
+                f"'accessRules[{idx}].relationType' is invalid: {relation_type!r}. "
+                f"Must be one of: {sorted(_VALID_RELATION_TYPES)}"
+            )
+
+    @staticmethod
+    def _validate_access_rules(access_rules: Any, errors: list) -> None:
+        """Validate the accessRules list; append problems to errors."""
+        if not isinstance(access_rules, list) or len(access_rules) == 0:
+            errors.append(
+                "'accessRules' must be a non-empty list (1-64 items). "
+                'Example: [{"accessType": "READ_WRITE", "relationType": "GLOBAL"}]'
+            )
+            return
+        if len(access_rules) > 64:
+            errors.append(f"'accessRules' exceeds maximum of 64 items (got {len(access_rules)}).")
+        for idx, rule in enumerate(access_rules):
+            CustomDashboardMCPTools._validate_access_rule(rule, idx, errors)
+
+    @staticmethod
+    def _validate_widget(widget: Any, idx: int, errors: list) -> None:
+        """Validate a single widget item; append problems to errors."""
+        if not isinstance(widget, dict):
+            errors.append(f"'widgets[{idx}]' must be an object.")
+            return
+        w_id = widget.get("id")
+        if w_id is None:
+            errors.append(f"'widgets[{idx}].id' is required (string, max 64 chars).")
+        elif len(str(w_id)) > 64:
+            errors.append(f"'widgets[{idx}].id' exceeds max length of 64 chars.")
+        if not widget.get("type") or not str(widget.get("type", "")).strip():
+            errors.append(f"'widgets[{idx}].type' is required (non-empty string).")
+        w_config = widget.get("config")
+        if w_config is None:
+            errors.append(f"'widgets[{idx}].config' is required (object).")
+        elif not isinstance(w_config, dict):
+            errors.append(f"'widgets[{idx}].config' must be an object, got: {type(w_config).__name__}")
+        w_width = widget.get("width")
+        if w_width is not None and (not isinstance(w_width, int) or not (1 <= w_width <= 12)):
+            errors.append(f"'widgets[{idx}].width' must be an integer 1-12, got: {w_width!r}")
+        w_x = widget.get("x")
+        if w_x is not None and (not isinstance(w_x, int) or not (0 <= w_x <= 11)):
+            errors.append(f"'widgets[{idx}].x' must be an integer 0-11, got: {w_x!r}")
+        w_y = widget.get("y")
+        if w_y is not None and (not isinstance(w_y, int) or w_y < 0):
+            errors.append(f"'widgets[{idx}].y' must be a non-negative integer, got: {w_y!r}")
+        w_height = widget.get("height")
+        if w_height is not None and (not isinstance(w_height, int) or w_height < 1):
+            errors.append(f"'widgets[{idx}].height' must be an integer ≥1, got: {w_height!r}")
+
+    @staticmethod
+    def _validate_widgets(widgets: Any, errors: list) -> None:
+        """Validate the widgets list; append problems to errors."""
+        if not isinstance(widgets, list):
+            errors.append("'widgets' must be a list (0-128 items).")
+            return
+        if len(widgets) > 128:
+            errors.append(f"'widgets' exceeds maximum of 128 items (got {len(widgets)}).")
+        for idx, widget in enumerate(widgets):
+            CustomDashboardMCPTools._validate_widget(widget, idx, errors)
+
+    @staticmethod
+    def _validate_dashboard_payload(custom_dashboard: dict, operation: str) -> Optional[Dict[str, Any]]:
+        """Validate the custom_dashboard payload for create/update operations.
+
+        Validated against SDK models CustomDashboard, AccessRule, Widget:
+
+        CustomDashboard:
+          - title       : str, min_length=1 (required)
+          - accessRules : list[AccessRule], min_length=1, max_length=64 (required if supplied;
+                          defaults are applied before this call so presence is guaranteed)
+          - widgets     : list[Widget], max_length=128 (required if supplied; defaults to [])
+
+        AccessRule (per item, if user supplies accessRules):
+          - accessType   : "READ" | "READ_WRITE"
+          - relationType : "USER" | "API_TOKEN" | "ROLE" | "TEAM" | "GLOBAL"
+
+        Widget (per item, if user supplies widgets):
+          - id     : str, max_length=64 (required)
+          - type   : str, min_length=1 (required)
+          - config : dict (required)
+          - width  : int, 1-12 (optional)
+          - x      : int, 0-11 (optional)
+          - y      : int, ≥0 (optional)
+          - height : int, ≥1 (optional)
+
+        Returns None when valid, or the canonical elicitation dict on any failure.
+        """
+        errors: list = []
+
+        title = custom_dashboard.get("title")
+        if not title or not str(title).strip():
+            errors.append(
+                "'title' is required and must be a non-empty string."
+                ' Example: "My Dashboard"'
+            )
+
+        access_rules = custom_dashboard.get("accessRules")
+        if access_rules is not None:
+            CustomDashboardMCPTools._validate_access_rules(access_rules, errors)
+
+        widgets = custom_dashboard.get("widgets")
+        if widgets is not None:
+            CustomDashboardMCPTools._validate_widgets(widgets, errors)
+
+        if not errors:
+            return None
+
+        n = len(errors)
+        return {
+            "elicitation_needed": True,
+            "reason": f"{operation} custom dashboard has {n} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The {operation} custom dashboard request has {n} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    _VALID_OPERATIONS = frozenset({
+        "get_all", "get", "create", "update", "delete",
+        "get_shareable_users", "get_shareable_api_tokens",
+    })
+
+    @staticmethod
+    def _preflight_dashboard_operation(
+        operation: str,
+        dashboard_id: Optional[str],
+        custom_dashboard: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Validate required parameters for the given operation; return elicitation dict or None."""
+        if operation not in CustomDashboardMCPTools._VALID_OPERATIONS:
+            return {
+                "elicitation_needed": True,
+                "reason": f"Operation '{operation}' is not supported",
+                "api_error": [f"operation: '{operation}' is not valid. Must be one of: {sorted(CustomDashboardMCPTools._VALID_OPERATIONS)}"],
+                "message": f"operation '{operation}' is not supported. Valid operations: {sorted(CustomDashboardMCPTools._VALID_OPERATIONS)}",
+            }
+
+        errors: list = []
+        if operation in ("get", "delete") and not dashboard_id:
+            errors.append(f"dashboard_id is required — provide the dashboard UUID to {operation}")
+        if operation == "update":
+            if not dashboard_id:
+                errors.append("dashboard_id is required — provide the dashboard UUID to update")
+            if custom_dashboard is None:
+                errors.append("custom_dashboard: required — provide the dashboard configuration dict with at least 'title'")
+        if operation == "create" and custom_dashboard is None:
+            errors.append("custom_dashboard: required — provide the dashboard configuration dict with at least 'title'")
+
+        if not errors:
+            return None
+        return {
+            "elicitation_needed": True,
+            "reason": f"{operation} has {len(errors)} missing required parameter(s)",
+            "api_error": errors,
+            "message": (
+                f"Cannot execute '{operation}': {len(errors)} required parameter(s) missing. "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    async def _dispatch_dashboard_operation(
+        self,
+        operation: str,
+        params: Dict[str, Any],
+        ctx,
+    ) -> Dict[str, Any]:
+        """Route a validated dashboard operation to the appropriate handler."""
+        dashboard_id = params.get("dashboard_id")
+        custom_dashboard = params.get("custom_dashboard")
+        dispatch = {
+            "get_all": lambda: self.get_custom_dashboards(
+                query=params.get("query"),
+                page_size=params.get("page_size"),
+                page=params.get("page"),
+                with_total_hits=params.get("with_total_hits"),
+                ctx=ctx,
+            ),
+            "get": lambda: self.get_custom_dashboard(dashboard_id=dashboard_id, ctx=ctx),
+            "create": lambda: self.add_custom_dashboard(custom_dashboard=custom_dashboard, ctx=ctx),
+            "update": lambda: self.update_custom_dashboard(dashboard_id=dashboard_id, custom_dashboard=custom_dashboard, ctx=ctx),
+            "delete": lambda: self.delete_custom_dashboard(dashboard_id=dashboard_id, ctx=ctx),
+            "get_shareable_users": lambda: self.get_shareable_users(ctx=ctx),
+            "get_shareable_api_tokens": lambda: self.get_shareable_api_tokens(ctx=ctx),
+        }
+        return await dispatch[operation]()
 
     # CRUD Operations Dispatcher - called by custom_dashboard_smart_router_tool.py
     async def execute_dashboard_operation(
@@ -63,54 +282,13 @@ class CustomDashboardMCPTools(BaseInstanaClient):
             Operation result dictionary
         """
         try:
-            # Initialize params if not provided
-            if params is None:
-                params = {}
-
-            # Extract parameters based on operation
-            dashboard_id = params.get("dashboard_id")
-            custom_dashboard = params.get("custom_dashboard")
-
-            if operation == "get_all":
-                # Extract get_all specific parameters
-                query = params.get("query")
-                page_size = params.get("page_size")
-                page = params.get("page")
-                with_total_hits = params.get("with_total_hits")
-
-                return await self.get_custom_dashboards(
-                    query=query,
-                    page_size=page_size,
-                    page=page,
-                    with_total_hits=with_total_hits,
-                    ctx=ctx
-                )
-            elif operation == "get":
-                if not dashboard_id:
-                    return {"error": "dashboard_id is required for 'get' operation"}
-                return await self.get_custom_dashboard(dashboard_id=dashboard_id, ctx=ctx)
-            elif operation == "create":
-                if not custom_dashboard:
-                    return {"error": "custom_dashboard is required for 'create' operation"}
-                return await self.add_custom_dashboard(custom_dashboard=custom_dashboard, ctx=ctx)
-            elif operation == "update":
-                if not dashboard_id:
-                    return {"error": "dashboard_id is required for 'update' operation"}
-                if not custom_dashboard:
-                    return {"error": "custom_dashboard is required for 'update' operation"}
-                return await self.update_custom_dashboard(dashboard_id=dashboard_id, custom_dashboard=custom_dashboard, ctx=ctx)
-            elif operation == "delete":
-                if not dashboard_id:
-                    return {"error": "dashboard_id is required for 'delete' operation"}
-                return await self.delete_custom_dashboard(dashboard_id=dashboard_id, ctx=ctx)
-            elif operation == "get_shareable_users":
-                # Note: This operation returns ALL shareable users globally, not for a specific dashboard
-                return await self.get_shareable_users(ctx=ctx)
-            elif operation == "get_shareable_api_tokens":
-                # Note: This operation returns ALL shareable API tokens globally, not for a specific dashboard
-                return await self.get_shareable_api_tokens(ctx=ctx)
-            else:
-                return {"error": f"Operation '{operation}' not supported"}
+            params = params or {}
+            preflight = self._preflight_dashboard_operation(
+                operation, params.get("dashboard_id"), params.get("custom_dashboard")
+            )
+            if preflight:
+                return preflight
+            return await self._dispatch_dashboard_operation(operation, params, ctx)
 
         except Exception as e:
             logger.error(f"Error executing {operation}: {e}", exc_info=True)
@@ -232,11 +410,16 @@ class CustomDashboardMCPTools(BaseInstanaClient):
         Uses api/custom-dashboard POST endpoint.
         """
         try:
-            if not custom_dashboard:
+            if custom_dashboard is None:
                 return {"error": "Custom dashboard configuration is required for this operation"}
 
             logger.debug("Adding custom dashboard to Instana SDK")
             logger.debug(json.dumps(custom_dashboard, indent=2))
+
+            # Pre-flight validation — collect ALL errors before touching the API
+            validation_result = self._validate_dashboard_payload(custom_dashboard, "create")
+            if validation_result is not None:
+                return validation_result
 
             # Prepare dashboard config with required fields
             dashboard_config = custom_dashboard.copy()
@@ -296,11 +479,16 @@ class CustomDashboardMCPTools(BaseInstanaClient):
             if not dashboard_id:
                 return {"error": "Dashboard ID is required for this operation"}
 
-            if not custom_dashboard:
+            if custom_dashboard is None:
                 return {"error": "Custom dashboard configuration is required for this operation"}
 
             logger.debug(f"Updating custom dashboard {dashboard_id} in Instana SDK")
             logger.debug(json.dumps(custom_dashboard, indent=2))
+
+            # Pre-flight validation — collect ALL errors before touching the API
+            validation_result = self._validate_dashboard_payload(custom_dashboard, "update")
+            if validation_result is not None:
+                return validation_result
 
             # Prepare dashboard config with required fields
             dashboard_config = custom_dashboard.copy()

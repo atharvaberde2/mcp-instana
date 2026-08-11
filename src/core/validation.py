@@ -3,11 +3,51 @@ Validation utilities for MCP tools.
 
 This module provides reusable validation functions to ensure parameters
 are valid before making API calls, reducing API failures and improving performance.
+
+Classes
+-------
+ValidationError
+    Holds a single field-level validation failure with context (provided value,
+    valid values, valid range, example).
+
+ValidationResult
+    Accumulates zero or more ValidationErrors from a single validation pass.
+    Callers check ``result.is_valid()`` and call ``result.to_dict()`` to produce
+    the elicitation payload returned to the LLM.
+
+TimeValidator
+    Validates timestamp and natural-language time-range parameters.
+    Used by: Events router.
+
+EventsValidator
+    Validates Events-domain-specific parameters (event_type_filters, max_events).
+    Used by: Events router / service layer.
+
+StructureValidator
+    Validates the shared structural fields that appear across Application, Website,
+    Mobile App, and Infrastructure analyze queries:
+
+    * ``validate_tag_filter_expression`` — TAG_FILTER/EXPRESSION discriminator,
+      required ``entity`` field and its enum, ``operator`` enum, non-empty ``name``.
+    * ``validate_metrics_array`` — non-empty list, each entry has non-empty
+      ``metric`` string and valid ``aggregation`` enum, list length ≤ max_items.
+    * ``validate_order`` — ``by`` non-empty, ``direction`` in {ASC, DESC}.
+    * ``validate_time_frame`` — ``windowSize`` within SDK bounds (0-2 678 400 000 ms).
+    * ``validate_pagination`` — ``retrievalSize`` within 1-200.
+    * ``validate_group`` — ``groupbyTag`` non-empty, ``groupbyTagEntity`` enum.
+
+    All methods collect *every* failing field before returning so the LLM receives
+    the full error list in one shot (Vipin's requirement).
+
+BooleanCoercer
+    Silently normalises LLM-generated boolean-like values (string ``"true"``/
+    ``"false"``, integers 0/1) to Python ``bool`` without triggering elicitation.
+    Used anywhere a ``StrictBool`` SDK field would otherwise reject the input.
 """
 
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 class ValidationError:
@@ -434,4 +474,744 @@ class EventsValidator:
                 example="100"
             )
 
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Constants shared by StructureValidator
+# ---------------------------------------------------------------------------
+
+# aggregation enum — identical across MetricConfig, WebsiteMonitoringMetricsConfiguration,
+# MobileAppMonitoringMetricsConfiguration, and SimpleMetricConfiguration (infra).
+VALID_AGGREGATIONS = frozenset({
+    "SUM", "MEAN", "MAX", "MIN",
+    "P25", "P50", "P75", "P90", "P95", "P98", "P99", "P99_9", "P99_99",
+    "DISTINCT_COUNT", "SUM_POSITIVE", "PER_SECOND", "INCREASE",
+})
+
+# beacon_type enum for website endpoints (GetWebsiteBeaconGroups, GetWebsiteBeacons)
+VALID_WEBSITE_BEACON_TYPES = frozenset({
+    "PAGELOAD", "RESOURCELOAD", "HTTPREQUEST", "ERROR", "CUSTOM", "PAGE_CHANGE",
+})
+
+# beacon_type enum for mobile app endpoints (GetMobileAppBeaconGroups, GetMobileAppBeacons)
+VALID_MOBILE_BEACON_TYPES = frozenset({
+    "SESSION_START", "HTTP_REQUEST", "CRASH", "CUSTOM", "VIEW_CHANGE", "DROP_BEACON", "PERF",
+})
+
+# operator enum from TagFilter.field_validator('operator')
+VALID_TAG_FILTER_OPERATORS = frozenset({
+    "EQUALS", "NOT_EQUAL", "CONTAINS", "NOT_CONTAIN",
+    "STARTS_WITH", "ENDS_WITH", "NOT_STARTS_WITH", "NOT_ENDS_WITH",
+    "GREATER_THAN", "GREATER_OR_EQUAL_THAN", "LESS_THAN", "LESS_OR_EQUAL_THAN",
+    "NOT_EMPTY", "IS_EMPTY", "NOT_BLANK", "IS_BLANK", "REGEX_MATCH",
+})
+
+# entity enum — identical across TagFilter, Group, WebsiteBeaconTagGroup,
+# MobileAppBeaconTagGroup (all use the same SDK field_validator).
+VALID_ENTITY_VALUES = frozenset({"NOT_APPLICABLE", "DESTINATION", "SOURCE"})
+
+# order.direction enum from Order.field_validator('direction')
+VALID_ORDER_DIRECTIONS = frozenset({"ASC", "DESC"})
+
+# TimeFrame.window_size SDK bounds (ge=0, le=2678400000  ~31 days)
+WINDOW_SIZE_MAX_MS = 2_678_400_000
+
+# CursorPagination.retrieval_size SDK bounds (ge=1, le=200)
+RETRIEVAL_SIZE_MIN = 1
+RETRIEVAL_SIZE_MAX = 200
+
+
+# ---------------------------------------------------------------------------
+# StructureValidator
+# ---------------------------------------------------------------------------
+
+class StructureValidator:
+    """
+    Pre-flight structural validation for the shared fields that appear across
+    Application, Website, Mobile App, and Infrastructure analyze queries.
+
+    Every method returns either:
+    - ``None``  — the field is absent (optional) or structurally valid.
+    - ``Dict``  — an elicitation dict with ``elicitation_needed: True``,
+                  a human-readable ``message``, a short ``reason``, and
+                  ``api_error`` (list of strings, one per problem found).
+
+    All errors are **collected in a single pass** before returning so the LLM
+    receives the complete list in one response (Vipin's requirement: no round-trip
+    retries per field).
+
+    The dict format mirrors the pattern established in PR #129
+    (metric_validation.py / website_analyze.py / application_call_group.py).
+    """
+
+    # ------------------------------------------------------------------
+    # tag_filter_expression
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_tag_filter_node(expr: Dict[str, Any], path: str, errors: List[str]) -> None:
+        """Validate the fields of a TAG_FILTER node."""
+        name = expr.get("name")
+        if not name or not isinstance(name, str):
+            errors.append(
+                f"{path}.name: required, must be a non-empty string "
+                f"(e.g. 'service.name'). Got: {name!r}"
+            )
+
+        entity = expr.get("entity")
+        if entity is None:
+            errors.append(
+                f"{path}.entity: MISSING — every TAG_FILTER must include "
+                f"'entity'. Valid values: {sorted(VALID_ENTITY_VALUES)}. "
+                f"Example: \"entity\": \"DESTINATION\""
+            )
+        elif entity not in VALID_ENTITY_VALUES:
+            errors.append(
+                f"{path}.entity: '{entity}' is not valid. "
+                f"Valid values: {sorted(VALID_ENTITY_VALUES)}"
+            )
+
+        operator = expr.get("operator")
+        if not operator or not isinstance(operator, str):
+            errors.append(
+                f"{path}.operator: required, must be a non-empty string. "
+                f"Valid values: {sorted(VALID_TAG_FILTER_OPERATORS)}"
+            )
+        elif operator not in VALID_TAG_FILTER_OPERATORS:
+            errors.append(
+                f"{path}.operator: '{operator}' is not valid. "
+                f"Valid values: {sorted(VALID_TAG_FILTER_OPERATORS)}"
+            )
+
+    @staticmethod
+    def _validate_expression_node(expr: Dict[str, Any], path: str, errors: List[str]) -> None:
+        """Validate the fields of an EXPRESSION node and recurse into its elements."""
+        logical_op = expr.get("logicalOperator")
+        if logical_op not in ("AND", "OR"):
+            errors.append(
+                f"{path}.logicalOperator: must be 'AND' or 'OR', got {logical_op!r}"
+            )
+
+        elements = expr.get("elements")
+        if elements is None or not isinstance(elements, list):
+            errors.append(
+                f"{path}.elements: must be a list (can be empty), got {type(elements).__name__!r}"
+            )
+        else:
+            for i, elem in enumerate(elements):
+                StructureValidator._collect_tag_filter_errors(
+                    elem, f"{path}.elements[{i}]", errors
+                )
+
+    @staticmethod
+    def _collect_tag_filter_errors(
+        expr: Any,
+        path: str,
+        errors: List[str],
+    ) -> None:
+        """
+        Recursively walk a tagFilterExpression dict and collect every
+        structural problem into *errors* as human-readable strings.
+        """
+        if not isinstance(expr, dict):
+            errors.append(
+                f"{path}: must be a dict with a 'type' key ('TAG_FILTER' or 'EXPRESSION'), "
+                f"got {type(expr).__name__!r}"
+            )
+            return
+
+        expr_type = expr.get("type")
+
+        if expr_type == "TAG_FILTER":
+            StructureValidator._validate_tag_filter_node(expr, path, errors)
+        elif expr_type == "EXPRESSION":
+            StructureValidator._validate_expression_node(expr, path, errors)
+        else:
+            errors.append(
+                f"{path}.type: '{expr_type}' is not valid. "
+                f"Must be 'TAG_FILTER' or 'EXPRESSION'"
+            )
+
+    @staticmethod
+    def validate_tag_filter_expression(
+        expr: Optional[Any],
+        field_name: str = "tagFilterExpression",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a tagFilterExpression dict.
+
+        Returns ``None`` when *expr* is ``None`` (field is optional) or valid.
+        Returns an elicitation dict listing **all** problems when invalid.
+
+        Parameters
+        ----------
+        expr:
+            Raw tagFilterExpression value from the LLM payload.
+        field_name:
+            Label used in error messages. Default: ``"tagFilterExpression"``.
+        """
+        if expr is None:
+            return None
+
+        errors: List[str] = []
+        StructureValidator._collect_tag_filter_errors(expr, field_name, errors)
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": (
+                f"{field_name} validation failed: "
+                f"{len(errors)} structural problem{'s' if len(errors) != 1 else ''} found"
+            ),
+            "api_error": errors,
+            "message": (
+                f"The {field_name} has {len(errors)} problem(s). "
+                f"Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # metrics array
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _collect_metric_entry_errors(entry: Any, prefix: str, errors: List[str]) -> None:
+        """Validate a single metric entry dict and append any problems to *errors*."""
+        if not isinstance(entry, dict):
+            errors.append(
+                f"{prefix}: must be a dict with 'metric' and 'aggregation' keys, "
+                f"got {type(entry).__name__!r}"
+            )
+            return
+
+        metric_name = entry.get("metric")
+        if not metric_name or not isinstance(metric_name, str):
+            errors.append(
+                f"{prefix}.metric: required, must be a non-empty string "
+                f"(e.g. 'latency'). Got: {metric_name!r}"
+            )
+
+        aggregation = entry.get("aggregation")
+        if not aggregation or not isinstance(aggregation, str):
+            errors.append(
+                f"{prefix}.aggregation: required, must be a non-empty string. "
+                f"Valid values: {sorted(VALID_AGGREGATIONS)}"
+            )
+        elif aggregation not in VALID_AGGREGATIONS:
+            errors.append(
+                f"{prefix}.aggregation: '{aggregation}' is not valid. "
+                f"Valid values: {sorted(VALID_AGGREGATIONS)}"
+            )
+
+    @staticmethod
+    def validate_metrics_array(
+        metrics: Optional[Any],
+        field_name: str = "metrics",
+        required: bool = False,
+        max_items: int = 5,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a metrics list.
+
+        Returns ``None`` when valid or absent (and not required).
+        Returns an elicitation dict listing all problems otherwise.
+
+        Parameters
+        ----------
+        metrics:
+            Raw metrics field value.
+        field_name:
+            Label for error messages.
+        required:
+            When ``True``, absent or empty list is an error.
+        max_items:
+            Maximum list length (5 for beacon/call/trace groups, 10 for infra).
+        """
+        if metrics is None:
+            if required:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"{field_name} is required but was not provided",
+                    "api_error": [f"{field_name}: required field missing"],
+                    "message": (
+                        f"{field_name} is required. Provide a list of metric objects, e.g.:\n"
+                        f'  [{{"metric": "calls", "aggregation": "SUM"}}, '
+                        f'{{"metric": "latency", "aggregation": "MEAN"}}]'
+                    ),
+                }
+            return None
+
+        if not isinstance(metrics, list):
+            return {
+                "elicitation_needed": True,
+                "reason": f"{field_name} must be a list, got {type(metrics).__name__!r}",
+                "api_error": [f"{field_name}: must be a list of metric objects"],
+                "message": (
+                    f"{field_name} must be a list of metric objects, e.g.:\n"
+                    f'  [{{"metric": "calls", "aggregation": "SUM"}}]'
+                ),
+            }
+
+        if required and len(metrics) == 0:
+            return {
+                "elicitation_needed": True,
+                "reason": f"{field_name} is empty — at least one metric is required",
+                "api_error": [f"{field_name}: must contain at least one metric"],
+                "message": (
+                    f"{field_name} must contain at least one metric object, e.g.:\n"
+                    f'  [{{"metric": "calls", "aggregation": "SUM"}}]'
+                ),
+            }
+
+        errors: List[str] = []
+
+        if len(metrics) > max_items:
+            errors.append(
+                f"{field_name}: contains {len(metrics)} items but maximum allowed is {max_items}"
+            )
+
+        for idx, entry in enumerate(metrics):
+            StructureValidator._collect_metric_entry_errors(entry, f"{field_name}[{idx}]", errors)
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": (
+                f"{field_name} validation failed: "
+                f"{len(errors)} problem{'s' if len(errors) != 1 else ''} found"
+            ),
+            "api_error": errors,
+            "message": (
+                f"{field_name} has {len(errors)} problem(s). "
+                f"Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # order
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def validate_order(
+        order: Optional[Any],
+        field_name: str = "order",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate an order object ``{"by": "...", "direction": "ASC"|"DESC"}``.
+
+        Returns ``None`` when *order* is ``None`` (optional) or valid.
+        Note: ``direction`` is case-sensitive — 'asc' and 'ASCENDING' are both invalid.
+        """
+        if order is None:
+            return None
+
+        errors: List[str] = []
+
+        if not isinstance(order, dict):
+            return {
+                "elicitation_needed": True,
+                "reason": f"{field_name} must be a dict, got {type(order).__name__!r}",
+                "api_error": [f"{field_name}: must be a dict with 'by' and 'direction' keys"],
+                "message": (
+                    f"{field_name} must be a dict, e.g.:\n"
+                    f'  {{"by": "calls", "direction": "DESC"}}'
+                ),
+            }
+
+        by_val = order.get("by")
+        if not by_val or not isinstance(by_val, str):
+            errors.append(
+                f"{field_name}.by: required, must be a non-empty string "
+                f"(e.g. 'calls', 'latency'). Got: {by_val!r}"
+            )
+
+        direction = order.get("direction")
+        if not direction or not isinstance(direction, str):
+            errors.append(
+                f"{field_name}.direction: required. "
+                f"Valid values: {sorted(VALID_ORDER_DIRECTIONS)} (case-sensitive)"
+            )
+        elif direction not in VALID_ORDER_DIRECTIONS:
+            errors.append(
+                f"{field_name}.direction: '{direction}' is not valid. "
+                f"Valid values: {sorted(VALID_ORDER_DIRECTIONS)} — note: case-sensitive, "
+                f"use 'ASC' or 'DESC' not 'asc'/'desc'/'ASCENDING'/'DESCENDING'"
+            )
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": (
+                f"{field_name} validation failed: "
+                f"{len(errors)} problem{'s' if len(errors) != 1 else ''} found"
+            ),
+            "api_error": errors,
+            "message": (
+                f"{field_name} has {len(errors)} problem(s). "
+                f"Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # time_frame
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def validate_time_frame(
+        time_frame: Optional[Any],
+        field_name: str = "timeFrame",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a timeFrame object ``{"to": <int|None>, "windowSize": <int>}``.
+
+        Checks ``windowSize`` against the SDK ``TimeFrame`` model bounds
+        (``ge=0, le=2_678_400_000`` ms  ≈ 31 days).
+
+        The ``to`` field is **not** checked here — datetime string conversion
+        is handled separately by ``convert_nested_datetime_param`` in the router.
+
+        Returns ``None`` when *time_frame* is ``None`` (optional) or valid.
+        """
+        if time_frame is None:
+            return None
+
+        if not isinstance(time_frame, dict):
+            return {
+                "elicitation_needed": True,
+                "reason": f"{field_name} must be a dict, got {type(time_frame).__name__!r}",
+                "api_error": [f"{field_name}: must be a dict with 'windowSize' and optional 'to' keys"],
+                "message": (
+                    f"{field_name} must be a dict, e.g.:\n"
+                    f'  {{"windowSize": 3600000}}\n'
+                    f'  {{"to": 1710658800000, "windowSize": 3600000}}'
+                ),
+            }
+
+        errors: List[str] = []
+        window_size = time_frame.get("windowSize")
+
+        if window_size is not None:
+            if not isinstance(window_size, int):
+                errors.append(
+                    f"{field_name}.windowSize: must be an integer (milliseconds), "
+                    f"got {type(window_size).__name__!r}"
+                )
+            elif window_size < 0 or window_size > WINDOW_SIZE_MAX_MS:
+                errors.append(
+                    f"{field_name}.windowSize: {window_size} is out of range. "
+                    f"Must be 0-{WINDOW_SIZE_MAX_MS} ms (~31 days maximum). "
+                    f"Example: 3600000 (1 hour)"
+                )
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": (
+                f"{field_name} validation failed: "
+                f"{len(errors)} problem{'s' if len(errors) != 1 else ''} found"
+            ),
+            "api_error": errors,
+            "message": (
+                f"{field_name} has {len(errors)} problem(s). "
+                f"Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # pagination
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def validate_pagination(
+        pagination: Optional[Any],
+        field_name: str = "pagination",
+        min_retrieval_size: int = RETRIEVAL_SIZE_MIN,
+        max_retrieval_size: int = RETRIEVAL_SIZE_MAX,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a pagination object ``{"retrievalSize": <int>}``.
+
+        Checks ``retrievalSize`` against the ``CursorPagination`` SDK bounds
+        (``ge=1, le=200`` by default).
+
+        Returns ``None`` when *pagination* is ``None`` (optional) or valid.
+        """
+        if pagination is None:
+            return None
+
+        if not isinstance(pagination, dict):
+            return {
+                "elicitation_needed": True,
+                "reason": f"{field_name} must be a dict, got {type(pagination).__name__!r}",
+                "api_error": [f"{field_name}: must be a dict, e.g. {{\"retrievalSize\": 50}}"],
+                "message": (
+                    f"{field_name} must be a dict, e.g.:\n"
+                    f'  {{"retrievalSize": 50}}'
+                ),
+            }
+
+        errors: List[str] = []
+        retrieval_size = pagination.get("retrievalSize")
+
+        if retrieval_size is not None:
+            if not isinstance(retrieval_size, int):
+                errors.append(
+                    f"{field_name}.retrievalSize: must be an integer, "
+                    f"got {type(retrieval_size).__name__!r}"
+                )
+            elif retrieval_size < min_retrieval_size or retrieval_size > max_retrieval_size:
+                errors.append(
+                    f"{field_name}.retrievalSize: {retrieval_size} is out of range. "
+                    f"Must be {min_retrieval_size}-{max_retrieval_size}"
+                )
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": (
+                f"{field_name} validation failed: "
+                f"{len(errors)} problem{'s' if len(errors) != 1 else ''} found"
+            ),
+            "api_error": errors,
+            "message": (
+                f"{field_name} has {len(errors)} problem(s). "
+                f"Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # group  (Application call/trace groups, Website, Mobile App)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def validate_group(
+        group: Optional[Any],
+        field_name: str = "group",
+        required: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a group object ``{"groupbyTag": "...", "groupbyTagEntity": "..."}``.
+
+        Accepts both ``groupbyTag`` and ``groupByTag`` — the service layer
+        normalises to the canonical alias afterwards.
+
+        The *value* of ``groupbyTag`` is **not** checked here because allowed
+        tag names differ per domain (e.g. only ``trace.endpoint.name`` /
+        ``trace.service.name`` for trace groups vs. any catalog tag for call
+        groups).  Domain-specific tag name checks belong in the service file.
+
+        Returns ``None`` when *group* is ``None`` (and not required) or valid.
+        """
+        if group is None:
+            if required:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"{field_name} is required but was not provided",
+                    "api_error": [f"{field_name}: required field missing"],
+                    "message": (
+                        f"{field_name} is required. Provide a grouping object, e.g.:\n"
+                        f'  {{"groupbyTag": "service.name", "groupbyTagEntity": "DESTINATION"}}'
+                    ),
+                }
+            return None
+
+        if not isinstance(group, dict):
+            return {
+                "elicitation_needed": True,
+                "reason": f"{field_name} must be a dict, got {type(group).__name__!r}",
+                "api_error": [f"{field_name}: must be a dict"],
+                "message": (
+                    f"{field_name} must be a dict, e.g.:\n"
+                    f'  {{"groupbyTag": "service.name", "groupbyTagEntity": "DESTINATION"}}'
+                ),
+            }
+
+        errors: List[str] = []
+
+        # Accept both camelCase variants the LLM commonly produces
+        groupby_tag = group.get("groupbyTag") or group.get("groupByTag")
+        if not groupby_tag or not isinstance(groupby_tag, str):
+            errors.append(
+                f"{field_name}.groupbyTag: required, must be a non-empty string. "
+                f"Use 'groupbyTag' (lowercase 'b') as the key. Got: {groupby_tag!r}"
+            )
+
+        groupby_tag_entity = (
+            group.get("groupbyTagEntity") or group.get("groupByTagEntity")
+        )
+        if not groupby_tag_entity or not isinstance(groupby_tag_entity, str):
+            errors.append(
+                f"{field_name}.groupbyTagEntity: required. "
+                f"Valid values: {sorted(VALID_ENTITY_VALUES)}. "
+                f"Example: \"groupbyTagEntity\": \"DESTINATION\""
+            )
+        elif groupby_tag_entity not in VALID_ENTITY_VALUES:
+            errors.append(
+                f"{field_name}.groupbyTagEntity: '{groupby_tag_entity}' is not valid. "
+                f"Valid values: {sorted(VALID_ENTITY_VALUES)}"
+            )
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": (
+                f"{field_name} validation failed: "
+                f"{len(errors)} problem{'s' if len(errors) != 1 else ''} found"
+            ),
+            "api_error": errors,
+            "message": (
+                f"{field_name} has {len(errors)} problem(s). "
+                f"Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+
+    # ------------------------------------------------------------------
+    # beacon_type
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def validate_beacon_type(
+        beacon_type: Optional[Any],
+        valid_types: frozenset,
+        field_name: str = "beacon_type",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a beacon_type string against a set of allowed values.
+
+        Returns ``None`` when *beacon_type* is ``None`` (optional at router level)
+        or valid.  Returns an elicitation dict when the value is present but
+        not a recognised enum member.
+
+        Parameters
+        ----------
+        beacon_type:
+            Raw beacon_type value from the LLM payload.
+        valid_types:
+            frozenset of accepted values (use ``VALID_WEBSITE_BEACON_TYPES``
+            or ``VALID_MOBILE_BEACON_TYPES`` from this module).
+        field_name:
+            Label used in error messages. Default: ``"beacon_type"``.
+        """
+        if beacon_type is None:
+            return None
+
+        if not isinstance(beacon_type, str) or not beacon_type.strip():
+            return {
+                "elicitation_needed": True,
+                "reason": f"{field_name} must be a non-empty string",
+                "api_error": [
+                    f"{field_name}: must be a non-empty string. "
+                    f"Valid values: {sorted(valid_types)}"
+                ],
+                "message": (
+                    f"{field_name} must be a non-empty string. "
+                    f"Valid values: {sorted(valid_types)}"
+                ),
+            }
+
+        if beacon_type not in valid_types:
+            return {
+                "elicitation_needed": True,
+                "reason": (
+                    f"{field_name} validation failed: '{beacon_type}' is not a valid beacon type"
+                ),
+                "api_error": [
+                    f"{field_name}: '{beacon_type}' is not valid. "
+                    f"Valid values: {sorted(valid_types)}"
+                ],
+                "message": (
+                    f"{field_name} '{beacon_type}' is not valid. "
+                    f"Valid values: {sorted(valid_types)}"
+                ),
+            }
+
+        return None
+
+
+# ---------------------------------------------------------------------------
+# BooleanCoercer
+# ---------------------------------------------------------------------------
+
+class BooleanCoercer:
+    """
+    Silently coerces LLM-generated boolean-like values to Python ``bool``.
+
+    The Instana SDK uses ``StrictBool`` for flags like ``includeInternal``,
+    ``includeSynthetic``, and ``fillTimeSeries``.  LLMs frequently produce
+    these as strings (``"true"``/``"false"``) or integers (``1``/``0``),
+    which Pydantic strict mode rejects with an opaque ``ValidationError``.
+
+    ``coerce`` normalises all common representations to ``True``, ``False``,
+    or ``None`` (when the input is ``None`` or unrecognisable).  It never
+    raises — callers decide what to do with ``None``.
+    """
+
+    _TRUE_VALUES: frozenset = frozenset({"true", "1", "yes", "on"})
+    _FALSE_VALUES: frozenset = frozenset({"false", "0", "no", "off"})
+
+    @staticmethod
+    def coerce(value: Any) -> Optional[bool]:
+        """
+        Coerce *value* to ``bool`` or return ``None`` if unrecognisable.
+
+        Parameters
+        ----------
+        value:
+            The raw value from the LLM payload.
+
+        Returns
+        -------
+        bool or None
+            ``True``/``False`` when *value* is a recognised truthy/falsy input.
+            ``None`` when *value* is ``None`` or not recognisable as boolean.
+
+        Examples
+        --------
+        >>> BooleanCoercer.coerce(True)    # bool passthrough
+        True
+        >>> BooleanCoercer.coerce("true")  # LLM string
+        True
+        >>> BooleanCoercer.coerce(1)       # int truthy
+        True
+        >>> BooleanCoercer.coerce(None)
+        None
+        >>> BooleanCoercer.coerce("maybe")
+        None
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            if value == 1:
+                return True
+            if value == 0:
+                return False
+            return None
+        if isinstance(value, str):
+            lower = value.strip().lower()
+            if lower in BooleanCoercer._TRUE_VALUES:
+                return True
+            if lower in BooleanCoercer._FALSE_VALUES:
+                return False
         return None

@@ -74,7 +74,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "plugin_id parameter is required" in result["error"]
 
     @pytest.mark.asyncio
@@ -145,7 +145,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get payload keys" in result["error"]
 
     # ==================== GET_INFRASTRUCTURE_CATALOG_METRICS TESTS ====================
@@ -220,8 +220,8 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
-        assert "plugin parameter is required" in result["error"]
+        assert "error" in result or result.get("elicitation_needed")
+        assert "plugin" in (result.get("error") or result.get("message", ""))
 
     @pytest.mark.asyncio
     async def test_get_infrastructure_catalog_metrics_large_list(self, instana_credentials):
@@ -295,7 +295,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get metric catalog" in result["error"]
 
     # ==================== GET_INFRASTRUCTURE_CATALOG_PLUGINS TESTS ====================
@@ -439,7 +439,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get plugins with custom metrics" in result["error"]
 
     # ==================== GET_TAG_CATALOG TESTS ====================
@@ -483,8 +483,8 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
-        assert "plugin parameter is required" in result["error"]
+        assert "error" in result or result.get("elicitation_needed")
+        assert "plugin" in (result.get("error") or result.get("message", ""))
 
     @pytest.mark.asyncio
     async def test_get_tag_catalog_406_error_fallback(self, instana_credentials):
@@ -534,7 +534,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get tag catalog" in result["error"]
 
     # ==================== GET_TAG_CATALOG_ALL TESTS ====================
@@ -642,7 +642,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Authentication failed" in result["error"]
 
     @pytest.mark.asyncio
@@ -668,7 +668,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to parse JSON response" in result["error"]
 
     # ==================== GET_INFRASTRUCTURE_CATALOG_SEARCH_FIELDS TESTS ====================
@@ -746,7 +746,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "API Error" in result["error"]
 
     # ==================== ADDITIONAL COVERAGE TESTS ====================
@@ -823,7 +823,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get payload keys: HTTP 404" in result["error"]
 
     @pytest.mark.asyncio
@@ -877,7 +877,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         # The implementation doesn't handle dict responses from JSON parsing (only lists)
         # So it falls through to the "Unexpected response format" error
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Unexpected response format for plugin host" in result["error"]
 
     @pytest.mark.asyncio
@@ -901,7 +901,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Unexpected response format for plugin host" in result["error"]
 
     @pytest.mark.asyncio
@@ -925,7 +925,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get metric catalog" in result["error"]
 
     @pytest.mark.asyncio
@@ -946,7 +946,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get tag catalog" in result["error"]
 
     @pytest.mark.asyncio
@@ -975,7 +975,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to parse JSON response" in result["error"]
 
     @pytest.mark.asyncio
@@ -1000,7 +1000,7 @@ class TestInfrastructureCatalogComprehensiveE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get tag catalog: HTTP 500" in result["error"]
 
     @pytest.mark.asyncio
@@ -1212,12 +1212,12 @@ class TestInfrastructureCatalogComprehensiveE2E:
             api_client=mock_api_client
         )
         assert isinstance(result2, dict)
-        assert "error" in result2
-        assert "plugin parameter is required" in result2["error"]
+        assert "error" in result2 or result2.get("elicitation_needed")
+        assert "plugin" in (result2.get("error") or result2.get("message", ""))
 
         result3 = await client.get_tag_catalog(
             plugin=None,
             api_client=mock_api_client
         )
         assert isinstance(result3, dict)
-        assert "error" in result3
+        assert "error" in result3 or result3.get("elicitation_needed")

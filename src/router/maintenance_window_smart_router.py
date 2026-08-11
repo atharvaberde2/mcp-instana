@@ -80,6 +80,8 @@ class MaintenanceWindowSmartRouterMCPTool(BaseInstanaClient):
     Routes queries to Maintenance Window Management tools.
     """
 
+    VALID_TEMPLATES = ["deployment", "database_migration", "infrastructure_upgrade", "emergency", "routine"]
+
     def __init__(self, read_token: str, base_url: str):
         """Initialize the Maintenance Window Smart Router MCP tool."""
         super().__init__(read_token=read_token, base_url=base_url)
@@ -285,8 +287,16 @@ Examples:
         """Validate resource_type and return error if invalid."""
         if resource_type not in VALID_RESOURCE_TYPES:
             return {
-                "error": f"Invalid resource_type '{resource_type}'. Must be one of: {VALID_RESOURCE_TYPES}",
-                "suggestion": "Use 'window' for maintenance window lifecycle operations, or 'templates' to retrieve available templates"
+                "elicitation_needed": True,
+                "reason": "invalid_resource_type",
+                "api_error": [
+                    {
+                        "field": "resource_type",
+                        "issue": f"'{resource_type}' is not a valid resource type",
+                        "expected": VALID_RESOURCE_TYPES
+                    }
+                ],
+                "message": f"Invalid resource_type '{resource_type}'. Must be one of: {VALID_RESOURCE_TYPES}"
             }
         return None
 
@@ -304,8 +314,16 @@ Examples:
             return await self._handle_templates(operation, ctx)
         else:
             return {
-                "error": f"Unsupported resource_type: {resource_type}",
-                "supported_types": VALID_RESOURCE_TYPES
+                "elicitation_needed": True,
+                "reason": "invalid_resource_type",
+                "api_error": [
+                    {
+                        "field": "resource_type",
+                        "issue": f"Unsupported resource_type: {resource_type}",
+                        "expected": VALID_RESOURCE_TYPES
+                    }
+                ],
+                "message": f"Unsupported resource_type '{resource_type}'. Must be one of: {VALID_RESOURCE_TYPES}"
             }
 
     def _handle_error(
@@ -333,6 +351,112 @@ Examples:
             }
         }
 
+    def _window_id_error(self, operation: str, hint: str, message: str) -> Dict[str, Any]:
+        return {
+            "elicitation_needed": True,
+            "reason": "missing_required_params",
+            "api_error": [
+                {
+                    "field": "window_id",
+                    "issue": f"window_id is required for {operation}",
+                    "hint": hint
+                }
+            ],
+            "message": message
+        }
+
+    def _create_window_validation_errors(
+        self,
+        operation: str,
+        field: str,
+        has_identifier: bool,
+        start_time,
+        template,
+    ) -> list[Dict[str, Any]]:
+        errors = []
+        if not has_identifier:
+            examples = {
+                OP_CREATE: "imap_code='EAL-012471'",
+                OP_BULK_CREATE: "imap_codes='EAL-012471,ORZ-000012'"
+            }
+            errors.append({
+                "field": field,
+                "issue": f"Either {field} is required",
+                "example": examples[operation]
+            })
+        if not start_time:
+            errors.append({
+                "field": "start_time",
+                "issue": "start_time is required",
+                "expected": "Unix timestamp in milliseconds (e.g., 1748786400000)"
+            })
+        if template and template not in self.VALID_TEMPLATES:
+            errors.append({
+                "field": "template",
+                "issue": f"'{template}' is not a valid template",
+                "expected": self.VALID_TEMPLATES
+            })
+        return errors
+
+    def _validate_window_operation(
+        self,
+        operation: str,
+        window_id,
+        imap_code,
+        application_id,
+        imap_codes,
+        application_ids,
+        start_time,
+        template,
+    ) -> Optional[Dict[str, Any]]:
+        if operation == OP_MODIFY and not window_id:
+            return self._window_id_error(
+                OP_MODIFY,
+                "Use list_active or list_scheduled to find window IDs",
+                "Missing required parameter 'window_id' for modify. Use list_active or list_scheduled to find IDs."
+            )
+
+        if operation == OP_CLOSE and not window_id:
+            return self._window_id_error(
+                OP_CLOSE,
+                "Use list_active to find active window IDs",
+                "Missing required parameter 'window_id' for close. Use list_active to find active window IDs."
+            )
+
+        if operation == OP_BULK_CREATE:
+            errors = self._create_window_validation_errors(
+                operation,
+                "imap_codes / application_ids",
+                bool(imap_codes or application_ids),
+                start_time,
+                template,
+            )
+            if errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": errors,
+                    "message": f"Missing or invalid parameters for bulk_create: {[e['field'] for e in errors]}"
+                }
+
+        if operation == OP_CREATE:
+            errors = self._create_window_validation_errors(
+                operation,
+                "imap_code / application_id",
+                bool(imap_code or application_id),
+                start_time,
+                template,
+            )
+            if errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": errors,
+                    "message": f"Missing or invalid parameters for create: {[e['field'] for e in errors]}"
+                }
+
+        return None
+
     async def _handle_window(
         self,
         operation: str,
@@ -342,17 +466,23 @@ Examples:
         """Handle maintenance window lifecycle operations."""
         if operation not in WINDOW_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for resource_type 'window'",
-                "valid_operations": WINDOW_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid window operation",
+                        "expected": WINDOW_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'window'. Valid operations: {WINDOW_VALID_OPERATIONS}"
             }
 
-        # Parse JSON array strings into lists for the underlying tool
         application_ids = self._parse_json_list(params.get(PARAM_APPLICATION_IDS))
         imap_codes = self._parse_json_list(params.get(PARAM_IMAP_CODES))
         affected_services = self._parse_json_list(params.get(PARAM_AFFECTED_SERVICES))
         notification_channels = self._parse_json_list(params.get(PARAM_NOTIFICATION_CHANNELS))
 
-        # Parse boolean string
         use_tag_filter_raw = params.get(PARAM_USE_TAG_FILTER_EXPRESSION)
         use_tag_filter = (
             str(use_tag_filter_raw).lower() == "true"
@@ -360,9 +490,21 @@ Examples:
             else False
         )
 
+        validation_error = self._validate_window_operation(
+            operation=operation,
+            window_id=params.get(PARAM_WINDOW_ID),
+            imap_code=params.get(PARAM_IMAP_CODE),
+            application_id=params.get(PARAM_APPLICATION_ID),
+            imap_codes=imap_codes,
+            application_ids=application_ids,
+            start_time=params.get(PARAM_START_TIME),
+            template=params.get(PARAM_TEMPLATE),
+        )
+        if validation_error:
+            return validation_error
+
         logger.info(f"Routing to Maintenance Window client for operation: {operation}")
 
-        # Build the params dictionary with parsed values
         operation_params = {
             PARAM_APPLICATION_ID: params.get(PARAM_APPLICATION_ID),
             PARAM_APPLICATION_IDS: application_ids,
@@ -406,9 +548,17 @@ Examples:
         """Handle maintenance window template retrieval."""
         if operation not in TEMPLATES_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for resource_type 'templates'",
-                "valid_operations": TEMPLATES_VALID_OPERATIONS,
-                "hint": "Use 'get' to retrieve all available maintenance window templates"
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid templates operation",
+                        "expected": TEMPLATES_VALID_OPERATIONS,
+                        "hint": "Use 'get' to retrieve all available maintenance window templates"
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'templates'. Valid operations: {TEMPLATES_VALID_OPERATIONS}"
             }
 
         logger.info("Routing to Maintenance Window client for get_templates")

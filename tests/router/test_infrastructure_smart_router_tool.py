@@ -98,9 +98,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             operation="test"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("invalid_type", result["error"].lower())
-        self.assertIn("valid_types", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("invalid_type", (result.get("error") or result.get("message", "")).lower())
 
     def test_manage_infrastructure_with_none_params(self):
         """Test manage_infrastructure initializes params when None"""
@@ -110,7 +109,7 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params=None
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_exception_handling(self):
         """Test exception handling in router"""
@@ -124,8 +123,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             operation="get_plugins"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Test error", str(result["error"]))
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Test error", str((result.get("error") or result.get("message", ""))))
 
     # ===== ANALYZE TESTS =====
 
@@ -231,9 +230,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={"payload": {}}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
-        self.assertIn("valid_operations", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     def test_analyze_missing_payload(self):
         """Test analyze with missing payload"""
@@ -243,9 +241,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter 'payload'", result["error"])
-        self.assertIn("required_format", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'payload'", (result.get("error") or result.get("message", "")))
 
     # ===== CATALOG TESTS =====
 
@@ -304,9 +301,9 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter 'plugin'", result["error"])
-        self.assertIn("hint", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'plugin'", (result.get("error") or result.get("message", "")))
+        self.assertTrue(any("hint" in e for e in result.get("api_error", []) if isinstance(e, dict)))
 
     def test_catalog_get_tag_catalog_success(self):
         """Test successful get_tag_catalog routing"""
@@ -332,8 +329,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter 'plugin'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'plugin'", (result.get("error") or result.get("message", "")))
 
     def test_catalog_get_plugin_schema_success(self):
         """Test successful get_plugin_schema routing"""
@@ -379,8 +376,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter 'plugin'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'plugin'", (result.get("error") or result.get("message", "")))
 
     def test_catalog_invalid_operation(self):
         """Test invalid operation for catalog"""
@@ -390,8 +387,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     # ===== RESOURCES TESTS =====
 
@@ -439,9 +436,9 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter 'snapshot_id'", result["error"])
-        self.assertIn("hint", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'snapshot_id'", (result.get("error") or result.get("message", "")))
+        self.assertTrue(any("hint" in e for e in result.get("api_error", []) if isinstance(e, dict)))
 
     def test_resources_get_snapshots_success(self):
         """Test successful get_snapshots routing"""
@@ -505,8 +502,8 @@ class TestInfrastructureSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     # ===== EDGE CASES AND ERROR HANDLING =====
 

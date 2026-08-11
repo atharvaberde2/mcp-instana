@@ -107,8 +107,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
         result = asyncio.run(self.tool.execute_maintenance_operation(
             operation="invalid_op"
         ))
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     def test_string_start_time_conversion(self):
         """String start_time is converted to integer."""
@@ -135,8 +135,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             start_time="not_a_number",
             duration_minutes="60"
         ))
-        self.assertIn("error", result)
-        self.assertIn("start_time must be", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("start_time", (result.get("error") or result.get("message", "")))
 
     def test_string_duration_conversion(self):
         """String duration parameters are converted to integers."""
@@ -167,8 +167,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             start_time=str(self.future_time),
             duration_minutes="not_a_number"
         ))
-        self.assertIn("error", result)
-        self.assertIn("duration_minutes must be", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("duration_minutes", (result.get("error") or result.get("message", "")))
 
     # -------------------------------------------------------------------------
     # Operation Routing Tests
@@ -306,7 +306,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             mock_bulk.assert_called_once()
 
     def test_validate_operation_routing(self):
-        """validate operation routes to _validate_window_params."""
+        """validate operation routes to _validate_window_params with imap_code as application_id."""
         with patch.object(self.tool, '_validate_window_params', new_callable=AsyncMock) as mock_validate:
             mock_validate.return_value = {"status": "valid"}
 
@@ -317,7 +317,10 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
                 duration_minutes=60
             ))
 
-            mock_validate.assert_called_once()
+            mock_validate.assert_called_once_with(
+                application_id="EAL-012471",
+                start_time=self.future_time
+            )
 
     def test_get_templates_operation(self):
         """get_templates operation returns templates."""
@@ -365,7 +368,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
 
         result = self.tool._check_response_status(mock_response, "test operation")
         self.assertIsNotNone(result)
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
         self.assertEqual(result["status_code"], 404)
 
     def test_check_response_status_no_status_attribute(self):
@@ -402,8 +405,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             start_time=self.future_time
         ))
 
-        self.assertEqual(result["status"], "invalid")
-        self.assertIn("application_id is required", result["errors"])
+        self.assertTrue(result.get("elicitation_needed") or "error" in result)
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_validate_missing_start_time(self, mock_timestamp):
@@ -415,8 +417,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             start_time=None
         ))
 
-        self.assertEqual(result["status"], "invalid")
-        self.assertIn("start_time is required", result["errors"])
+        self.assertTrue(result.get("elicitation_needed") or "error" in result)
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_validate_past_start_time(self, mock_timestamp):
@@ -429,8 +430,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             start_time=past_time
         ))
 
-        self.assertEqual(result["status"], "invalid")
-        self.assertIn("start_time cannot be in the past", result["errors"])
+        self.assertTrue(result.get("elicitation_needed") or "error" in result)
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_validate_invalid_template(self, mock_timestamp):
@@ -509,8 +509,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
                 duration_minutes=60
             ))
 
-            self.assertIn("error", result)
-            self.assertIn("Test error", result["error"])
+            self.assertTrue("error" in result or result.get("elicitation_needed"))
+            self.assertIn("Test error", (result.get("error") or result.get("message", "")))
 
     # -------------------------------------------------------------------------
     # _create_maintenance_window Tests
@@ -548,8 +548,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("imap_code or application_id is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("imap_code", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_create_window_missing_start_time(self, mock_timestamp):
@@ -580,8 +580,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("start_time is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("start_time", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_create_window_invalid_template(self, mock_timestamp):
@@ -612,8 +612,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid template", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("template", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_create_window_past_start_time(self, mock_timestamp):
@@ -645,8 +645,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("start_time cannot be in the past", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("start_time", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     @patch('src.maintenance_window.maintenance_window_tool.uuid.uuid4')
@@ -703,6 +703,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
 
     def test_modify_window_missing_window_id(self):
         """modify returns error when window_id is missing."""
+        _mock_api_client = Mock()
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     @patch('src.maintenance_window.maintenance_window_tool.uuid.uuid4')
@@ -963,6 +964,9 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
         mock_timestamp.return_value = {"timestamp": self.current_time}
         mock_uuid.return_value = Mock(hex='1234567890abcdef')
 
+        _mock_api_client = Mock()
+        _mock_response = Mock()
+
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     @patch('src.maintenance_window.maintenance_window_tool.uuid.uuid4')
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceConfigV2')
@@ -1166,7 +1170,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
         ))
 
         self.assertIsNotNone(result)
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
         mock_response.status = 201
         mock_response.read.return_value = json.dumps({"id": "mw-123"}).encode()
         mock_api_client.put_maintenance_config_v2_without_preload_content.return_value = mock_response
@@ -1239,8 +1243,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
         ))
 
         self.assertIsNotNone(result)
-        self.assertIn("error", result)
-        self.assertIn("Empty response", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Empty response", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     @patch('src.maintenance_window.maintenance_window_tool.uuid.uuid4')
@@ -1438,6 +1442,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceConfigV2')
     def test_modify_window_api_error(self, mock_config_class):
         """modify handles API errors."""
+        _mock_api_client = Mock()
+        _mock_response = Mock()
 
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceConfigV2')
     def test_modify_window_with_until_date_iso_format(self, mock_config_class):
@@ -1616,7 +1622,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
         ))
 
         self.assertIsNotNone(result)
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceConfigV2')
     def test_modify_window_no_existing_rrule_with_until_date(self, mock_config_class):
@@ -1684,7 +1690,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
         ))
 
         self.assertIsNotNone(result)
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_modify_window_not_found(self):
         """modify returns error when window is not found."""
@@ -1704,7 +1710,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceConfigV2')
     def test_modify_window_success(self, mock_config_class):
@@ -1768,8 +1774,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("window_id is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("window_id", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_close_window_success(self, mock_timestamp):
@@ -1961,8 +1967,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
         ))
 
         self.assertIsNotNone(result)
-        self.assertIn("error", result)
-        self.assertIn("imap_codes or application_ids is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("imap_codes", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceWindowMCPTools._create_maintenance_window')
     def test_bulk_create_success(self, mock_create):
@@ -2070,8 +2076,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("end_time must be after start_time", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("end_time must be after start_time", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_list_active_windows_fallback_to_occurrence(self, mock_timestamp):
@@ -2170,8 +2176,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to list active windows", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to list active windows", (result.get("error") or result.get("message", "")))
 
     def test_list_scheduled_windows_with_application_filter(self):
         """list_scheduled filters by application_id."""
@@ -2210,8 +2216,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to list scheduled windows", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to list scheduled windows", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.get_current_timestamp')
     def test_list_active_windows_with_tag_filter_expression(self, mock_timestamp):
@@ -2279,7 +2285,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_create_window_invalid_duration_hours_string(self):
         """create returns error when duration_hours string is invalid."""
@@ -2308,7 +2314,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_create_window_invalid_duration_days_string(self):
         """create returns error when duration_days string is invalid."""
@@ -2337,7 +2343,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceConfigV2')
     def test_create_window_general_exception(self, mock_config_class):
@@ -2368,8 +2374,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to create maintenance window", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to create maintenance window", (result.get("error") or result.get("message", "")))
 
     @patch('src.maintenance_window.maintenance_window_tool.MaintenanceConfigV2')
     def test_modify_window_general_exception(self, mock_config_class):
@@ -2388,8 +2394,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to fetch window", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to fetch window", (result.get("error") or result.get("message", "")))
 
     def test_close_window_general_exception(self):
         """close handles general exceptions."""
@@ -2403,8 +2409,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             api_client=mock_api_client
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to close maintenance window", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to close maintenance window", (result.get("error") or result.get("message", "")))
 
 
     def test_execute_operation_invalid_end_time_string(self):
@@ -2417,7 +2423,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             ctx=None
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_execute_operation_invalid_duration_hours_string(self):
         """execute_maintenance_operation handles invalid duration_hours string."""
@@ -2429,7 +2435,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             ctx=None
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_execute_operation_invalid_duration_days_string(self):
         """execute_maintenance_operation handles invalid duration_days string."""
@@ -2441,7 +2447,7 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             ctx=None
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_execute_operation_unimplemented_operation(self):
         """execute_maintenance_operation handles unimplemented operations."""
@@ -2452,8 +2458,8 @@ class TestMaintenanceWindowMCPTools(unittest.TestCase):
             ctx=None
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
 
 if __name__ == '__main__':

@@ -6,7 +6,9 @@ This module provides application settings-specific MCP tools for Instana monitor
 The API endpoints of this group provides a way to create, read, update, delete (CRUD) for various configuration settings.
 """
 
+import ast
 import copy
+import json
 import logging
 import sys
 import traceback
@@ -48,6 +50,23 @@ except ImportError as e:
     print(f"Error importing Instana SDK: {e}", file=sys.stderr)
     traceback.print_exc(file=sys.stderr)
     raise
+
+
+# Helper function for debug printing
+def debug_print(*args, **kwargs):
+    """Print debug information to stderr instead of stdout"""
+    print(*args, file=sys.stderr, **kwargs)
+
+# ---------------------------------------------------------------------------
+# Enum constants for settings validation
+# ---------------------------------------------------------------------------
+VALID_SCOPE_VALUES = frozenset({
+    "INCLUDE_ALL_DOWNSTREAM",
+    "INCLUDE_IMMEDIATE_DOWNSTREAM_DATABASE_AND_MESSAGING",
+    "INCLUDE_NO_DOWNSTREAM",
+})
+VALID_BOUNDARY_SCOPE_VALUES = frozenset({"ALL", "INBOUND", "DEFAULT"})
+VALID_ENDPOINT_CASE_VALUES = frozenset({"ORIGINAL", "LOWER", "UPPER"})
 
 
 class ApplicationSettingsMCPTools(BaseInstanaClient):
@@ -101,6 +120,36 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
             Operation result dictionary
         """
         try:
+            # --- Pre-flight: collect ALL missing required params in one pass ---
+            errors: List[str] = []
+
+            # id is required for get / update / delete
+            if operation in ("get", "update", "delete") and not id:
+                errors.append(
+                    f"id: required for '{operation}' — "
+                    "provide the configuration ID (obtain one from 'get_all')"
+                )
+
+            # payload is required for create / update
+            if operation in ("create", "update") and not payload:
+                errors.append(
+                    f"payload: required for '{operation}' — "
+                    "provide the configuration dictionary"
+                )
+
+            if errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"settings '{operation}' has {len(errors)} missing required parameter(s)",
+                    "api_error": errors,
+                    "message": (
+                        f"Cannot execute '{operation}': {len(errors)} required parameter(s) missing. "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e}" for e in errors)
+                    ),
+                }
+            # --- End pre-flight ---
+
             # Route based on resource_subtype and operation
             if resource_subtype == "application":
                 if operation == "get_all":
@@ -172,7 +221,6 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
             logger.debug("Fetching all applications and their settings")
             # Use raw JSON response to avoid Pydantic validation issues
             result = api_client.get_application_configs_without_preload_content()
-            import json
             try:
                 response_text = decode_response(result)
                 json_data = json.loads(response_text)
@@ -337,6 +385,145 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
 
         return {"payload": request_body}
 
+    # ------------------------------------------------------------------
+    # Pre-flight validation helpers (return elicitation dict or None)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_application_fields(payload: Dict[str, Any], errors: List[str]) -> None:
+        """Validate fields specific to the 'application' subtype."""
+        if not payload.get("label") or not str(payload.get("label", "")).strip():
+            errors.append(
+                "'label' (application perspective name) is required and must be a non-empty string"
+            )
+        scope = payload.get("scope")
+        if scope is not None and scope not in VALID_SCOPE_VALUES:
+            errors.append(
+                f"'scope' value '{scope}' is invalid. "
+                f"Must be one of: {sorted(VALID_SCOPE_VALUES)}"
+            )
+        boundary = payload.get("boundaryScope")
+        if boundary is not None and boundary not in VALID_BOUNDARY_SCOPE_VALUES:
+            errors.append(
+                f"'boundaryScope' value '{boundary}' is invalid. "
+                f"Must be one of: {sorted(VALID_BOUNDARY_SCOPE_VALUES)}"
+            )
+        access_rules = payload.get("accessRules")
+        if access_rules is not None and not isinstance(access_rules, list):
+            errors.append("'accessRules' must be a list of access rule objects")
+
+    @staticmethod
+    def _validate_endpoint_fields(payload: Dict[str, Any], errors: List[str]) -> None:
+        """Validate fields specific to the 'endpoint' subtype."""
+        endpoint_case = payload.get("endpointCase")
+        if not endpoint_case:
+            errors.append(
+                "'endpointCase' is required. "
+                f"Must be one of: {sorted(VALID_ENDPOINT_CASE_VALUES)}"
+            )
+        elif endpoint_case not in VALID_ENDPOINT_CASE_VALUES:
+            errors.append(
+                f"'endpointCase' value '{endpoint_case}' is invalid. "
+                f"Must be one of: {sorted(VALID_ENDPOINT_CASE_VALUES)}"
+            )
+        service_id = payload.get("serviceId")
+        if not service_id or not str(service_id).strip():
+            errors.append("'serviceId' is required for endpoint config")
+
+    @staticmethod
+    def _validate_service_fields(payload: Dict[str, Any], errors: List[str]) -> None:
+        """Validate fields specific to the 'service' subtype."""
+        label = payload.get("label")
+        if not label or not str(label).strip():
+            errors.append("'label' (display name) is required for service config")
+        name = payload.get("name")
+        if not name or not str(name).strip():
+            errors.append("'name' is required for service config")
+        if "enabled" not in payload:
+            errors.append("'enabled' (boolean) is required for service config")
+        elif not isinstance(payload["enabled"], bool):
+            errors.append("'enabled' must be a boolean (true/false)")
+        if payload.get("matchSpecification") is None:
+            errors.append("'matchSpecification' is required for service config")
+
+    @staticmethod
+    def _validate_manual_service_fields(payload: Dict[str, Any], errors: List[str]) -> None:
+        """Validate fields specific to the 'manual_service' subtype."""
+        tag_filter = payload.get("tagFilterExpression")
+        if tag_filter is None:
+            errors.append(
+                "'tagFilterExpression' is required for manual service config. "
+                "Example: {\"type\": \"TAG_FILTER\", \"name\": \"service.name\", "
+                "\"operator\": \"EQUALS\", \"entity\": \"NOT_APPLICABLE\", \"value\": \"my-service\"}"
+            )
+        elif not isinstance(tag_filter, dict):
+            errors.append("'tagFilterExpression' must be a dictionary")
+
+    _SUBTYPE_VALIDATORS = {
+        "application": _validate_application_fields.__func__,
+        "endpoint": _validate_endpoint_fields.__func__,
+        "service": _validate_service_fields.__func__,
+        "manual_service": _validate_manual_service_fields.__func__,
+    }
+
+    @staticmethod
+    def _validate_settings_payload(
+        subtype: str,
+        operation: str,
+        payload: Any,
+        id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate settings payloads before sending to the API.
+
+        Collects ALL validation errors in a single pass so the LLM gets
+        the complete list in one response.
+
+        Args:
+            subtype:   'application' | 'endpoint' | 'service' | 'manual_service'
+            operation: 'create' | 'update'
+            payload:   The raw dict payload (already parsed from string if needed)
+            id:        Resource ID (required for 'update')
+
+        Returns:
+            None if valid, elicitation dict if there are errors.
+        """
+        errors: List[str] = []
+
+        if operation == "update" and (not id or (isinstance(id, str) and not id.strip())):
+            errors.append("'id' is required for update operations")
+
+        if payload is None or not isinstance(payload, dict):
+            errors.append("'payload' must be a non-empty dictionary")
+            return {
+                "elicitation_needed": True,
+                "reason": f"{operation} {subtype} config: payload is missing or invalid",
+                "api_error": errors,
+                "message": (
+                    f"Cannot {operation} {subtype} config — payload is missing or not a dict. "
+                    "Please provide a valid configuration dictionary."
+                ),
+            }
+
+        validator = ApplicationSettingsMCPTools._SUBTYPE_VALIDATORS.get(subtype)
+        if validator:
+            validator(payload, errors)
+
+        if not errors:
+            return None
+
+        count = len(errors)
+        return {
+            "elicitation_needed": True,
+            "reason": f"{operation} {subtype} config has {count} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The {operation} {subtype} config request has {count} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
     @with_header_auth(ApplicationSettingsApi)
     async def _add_application_config(self,
                                       payload: Union[Dict[str, Any], str],
@@ -356,16 +543,16 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
         - matchSpecification: Match specification (optional)
         """
         try:
-            if not payload:
-                return {
-                    "error": "payload is required",
-                    "required_fields": {
-                        "label": "Application perspective name (string, required, 1-128 chars)"
-                    },
-                    "example": {
-                        "label": "My Application"
-                    }
-                }
+            # Parse string payload early so validation can inspect the dict
+            if isinstance(payload, str):
+                import contextlib
+                with contextlib.suppress(Exception):
+                    payload = json.loads(payload)
+
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("application", "create", payload)
+            if _elicitation:
+                return _elicitation
 
             # Validate and prepare payload with SDK-required defaults
             validation_result = self._validate_and_prepare_application_payload(payload)
@@ -444,15 +631,22 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
                                          api_client=None) -> Dict[str, Any]:
         """Update an existing Application Perspective configuration."""
         try:
-            if not id or not payload:
-                return {"error": "id and payload are required"}
+            # Parse string payload early so validation can inspect the dict
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    try:
+                        payload = ast.literal_eval(payload)
+                    except (SyntaxError, ValueError) as e:
+                        return {"error": f"Invalid payload format: {e}"}
 
-            # Parse the payload if it's a string, or deep-copy if it's a dict
-            # to avoid mutating the caller's tagFilterExpression in place.
-            parsed = parse_payload(payload)
-            if "error" in parsed:
-                return parsed
-            request_body = copy.deepcopy(parsed)
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("application", "update", payload, id=id)
+            if _elicitation:
+                return _elicitation
+
+            request_body = payload
 
             # Convert nested tagFilterExpression dict to SDK model objects if present
             if 'tagFilterExpression' in request_body and isinstance(request_body['tagFilterExpression'], dict):
@@ -494,7 +688,6 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
         """Get all Endpoint Perspectives Configuration."""
         try:
             result = api_client.get_endpoint_configs_without_preload_content()
-            import json
             response_text = decode_response(result)
             json_data = json.loads(response_text)
             return json_data if isinstance(json_data, list) else [json_data] if json_data else []
@@ -526,10 +719,18 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
                                       api_client=None) -> Dict[str, Any]:
         """Create or update endpoint configuration for a service."""
         try:
-            request_body = parse_payload(payload)
-            if "error" in request_body:
-                return request_body
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = ast.literal_eval(payload)
 
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("endpoint", "create", payload)
+            if _elicitation:
+                return _elicitation
+
+            request_body = payload
             config_object = EndpointConfig(**request_body)
             result = api_client.create_endpoint_config(endpoint_config=config_object)
             if hasattr(result, 'to_dict'):
@@ -547,13 +748,18 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
                                       api_client=None) -> Dict[str, Any]:
         """Update an endpoint configuration."""
         try:
-            if not id:
-                return {"error": "id and payload are required"}
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = ast.literal_eval(payload)
 
-            request_body = parse_payload(payload)
-            if "error" in request_body:
-                return request_body
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("endpoint", "update", payload, id=id)
+            if _elicitation:
+                return _elicitation
 
+            request_body = payload
             config_object = EndpointConfig(**request_body)
             result = api_client.update_endpoint_config(id=id, endpoint_config=config_object)
             if hasattr(result, 'to_dict'):
@@ -586,7 +792,6 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
         """Get all Service configurations."""
         try:
             result = api_client.get_service_configs_without_preload_content()
-            import json
             response_text = decode_response(result)
             json_data = json.loads(response_text)
             return json_data if isinstance(json_data, list) else [json_data] if json_data else []
@@ -618,10 +823,18 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
                                   api_client=None) -> Dict[str, Any]:
         """Add a new Service configuration."""
         try:
-            request_body = parse_payload(payload)
-            if "error" in request_body:
-                return request_body
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = ast.literal_eval(payload)
 
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("service", "create", payload)
+            if _elicitation:
+                return _elicitation
+
+            request_body = payload
             config_object = ServiceConfig(**request_body)
             result = api_client.add_service_config(service_config=config_object)
             if hasattr(result, 'to_dict'):
@@ -639,13 +852,18 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
                                      api_client=None) -> Dict[str, Any]:
         """Update a Service configuration."""
         try:
-            if not id:
-                return {"error": "id and payload are required"}
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = ast.literal_eval(payload)
 
-            request_body = parse_payload(payload)
-            if "error" in request_body:
-                return request_body
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("service", "update", payload, id=id)
+            if _elicitation:
+                return _elicitation
 
+            request_body = payload
             config_object = ServiceConfig(**request_body)
             result = api_client.update_service_config(id=id, service_config=config_object)
             if hasattr(result, 'to_dict'):
@@ -678,7 +896,6 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
         """Get all Manual Service configurations."""
         try:
             result = api_client.get_all_manual_service_configs_without_preload_content()
-            import json
             response_text = decode_response(result)
             json_data = json.loads(response_text)
             return json_data if isinstance(json_data, list) else [json_data] if json_data else []
@@ -693,10 +910,18 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
                                          api_client=None) -> Dict[str, Any]:
         """Add a new Manual Service configuration."""
         try:
-            request_body = parse_payload(payload)
-            if "error" in request_body:
-                return request_body
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = ast.literal_eval(payload)
 
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("manual_service", "create", payload)
+            if _elicitation:
+                return _elicitation
+
+            request_body = payload
             config_object = NewManualServiceConfig(**request_body)
             result = api_client.add_manual_service_config(new_manual_service_config=config_object)
             if hasattr(result, 'to_dict'):
@@ -714,13 +939,18 @@ class ApplicationSettingsMCPTools(BaseInstanaClient):
                                             api_client=None) -> Dict[str, Any]:
         """Update a Manual Service configuration."""
         try:
-            if not id:
-                return {"error": "id and payload are required"}
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = ast.literal_eval(payload)
 
-            request_body = parse_payload(payload)
-            if "error" in request_body:
-                return request_body
+            # --- Pre-flight validation ---
+            _elicitation = self._validate_settings_payload("manual_service", "update", payload, id=id)
+            if _elicitation:
+                return _elicitation
 
+            request_body = payload
             config_object = ManualServiceConfig(**request_body)
             result = api_client.update_manual_service_config(id=id, manual_service_config=config_object)
             if hasattr(result, 'to_dict'):

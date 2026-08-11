@@ -30,6 +30,9 @@ from src.core.utils import BaseInstanaClient, register_as_tool, with_header_auth
 # Configure logger for this module
 logger = logging.getLogger(__name__)
 
+# Valid enum values for application_boundary_scope (ApplicationPerspective.boundaryScope)
+VALID_APPLICATION_BOUNDARY_SCOPES = frozenset({"ALL", "INBOUND", "DEFAULT"})
+
 class ApplicationResourcesMCPTools(BaseInstanaClient):
     """Tools for application resources in Instana MCP."""
 
@@ -71,6 +74,22 @@ class ApplicationResourcesMCPTools(BaseInstanaClient):
             Operation result dictionary with paginated results
         """
         try:
+            # --- Pre-flight validation: application_boundary_scope enum ---
+            if application_boundary_scope is not None and \
+                    application_boundary_scope not in VALID_APPLICATION_BOUNDARY_SCOPES:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"Invalid application_boundary_scope value: '{application_boundary_scope}'",
+                    "api_error": [
+                        f"'application_boundary_scope' value '{application_boundary_scope}' is invalid. "
+                        f"Must be one of: {sorted(VALID_APPLICATION_BOUNDARY_SCOPES)}"
+                    ],
+                    "message": (
+                        f"'application_boundary_scope' value '{application_boundary_scope}' is not valid. "
+                        f"Accepted values are: {sorted(VALID_APPLICATION_BOUNDARY_SCOPES)}."
+                    ),
+                }
+
             if operation == "get_applications":
                 return await self.get_applications(
                     name_filter=name_filter,

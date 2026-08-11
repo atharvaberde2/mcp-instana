@@ -200,9 +200,16 @@ Examples:
             if resource_type not in VALID_RESOURCE_TYPES:
                 logger.warning(f"Invalid resource_type: {resource_type}")
                 return {
-                    "error": f"Invalid resource_type '{resource_type}'.",
-                    "valid_resource_types": VALID_RESOURCE_TYPES,
-                    "suggestion": f"Choose '{RESOURCE_TYPE_CATALOG}' for browsing actions or '{RESOURCE_TYPE_HISTORY}' for execution history"
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        f"resource_type: '{resource_type}' is not valid. "
+                        f"Must be one of: {VALID_RESOURCE_TYPES}"
+                    ],
+                    "message": (
+                        f"Invalid resource_type '{resource_type}'. "
+                        f"Valid values are: {VALID_RESOURCE_TYPES}."
+                    ),
                 }
 
             # Route to the appropriate resource handler
@@ -236,8 +243,16 @@ Examples:
         if operation not in CATALOG_VALID_OPERATIONS:
             logger.warning(f"Invalid catalog operation: {operation}")
             return {
-                "error": f"Invalid catalog operation '{operation}'.",
-                "valid_operations": CATALOG_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": f"Invalid catalog operation: {operation!r}",
+                "api_error": [
+                    f"operation: {operation!r} is not valid for resource_type 'catalog'. "
+                    f"Must be one of: {CATALOG_VALID_OPERATIONS}"
+                ],
+                "message": (
+                    f"operation {operation!r} is not valid for resource_type 'catalog'. "
+                    f"Accepted values are: {CATALOG_VALID_OPERATIONS}."
+                ),
             }
 
         try:
@@ -257,9 +272,16 @@ Examples:
                 if not action_id:
                     logger.warning(f"Missing required parameter: {PARAM_ACTION_ID}")
                     return {
-                        "error": f"Missing required parameter: '{PARAM_ACTION_ID}'",
-                        "resource_type": RESOURCE_TYPE_CATALOG,
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": f"catalog '{operation}': action_id is required",
+                        "api_error": [
+                            "action_id: required — provide the action UUID "
+                            "(obtain one from the 'get_actions' operation)"
+                        ],
+                        "message": (
+                            "action_id is required for 'get_action_details'. "
+                            "Obtain it from the 'get_actions' operation first."
+                        ),
                     }
                 logger.info(f"Routing to get_action_details with action_id: {action_id}")
                 result = await self.action_catalog_client.get_action_details(
@@ -280,15 +302,17 @@ Examples:
                 if not payload:
                     logger.warning(f"Missing required parameter: {PARAM_PAYLOAD}")
                     return {
-                        "error": f"Missing required parameter: '{PARAM_PAYLOAD}'",
-                        "resource_type": RESOURCE_TYPE_CATALOG,
-                        "operation": operation,
-                        "example": {
-                            "payload": {
-                                "name": "Action name or search term",
-                                "description": "Optional description"
-                            }
-                        }
+                        "elicitation_needed": True,
+                        "reason": f"catalog '{operation}': payload is required",
+                        "api_error": [
+                            "payload: required — provide a dict with at least 'name'. "
+                            'Example: {"name": "CPU usage high", "description": "..."}'
+                        ],
+                        "message": (
+                            "payload is required for 'get_action_matches'. "
+                            'Provide a dict with at least "name", e.g.: '
+                            '{"name": "CPU usage high", "description": "..."}'
+                        ),
                     }
                 logger.info(f"Routing to get_action_matches with payload: {payload}")
                 result = await self.action_catalog_client.get_action_matches(
@@ -319,9 +343,10 @@ Examples:
 
                 if "error" in conversion_result:
                     return {
-                        "error": conversion_result["error"],
-                        "resource_type": RESOURCE_TYPE_CATALOG,
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": "invalid_time_params",
+                        "api_error": [conversion_result["error"]],
+                        "message": conversion_result["error"],
                     }
 
                 # Update the converted value
@@ -331,13 +356,17 @@ Examples:
                 if not application_id and not snapshot_id:
                     logger.warning(f"[_handle_catalog_operation] Missing required parameter: either {PARAM_APPLICATION_ID} or {PARAM_SNAPSHOT_ID}")
                     return {
-                        "error": f"Either '{PARAM_APPLICATION_ID}' or '{PARAM_SNAPSHOT_ID}' must be provided",
-                        "resource_type": RESOURCE_TYPE_CATALOG,
-                        "operation": operation,
-                        "example": {
-                            "application_id": "app-123",
-                            "window_size": 3600000
-                        }
+                        "elicitation_needed": True,
+                        "reason": f"catalog '{operation}': either application_id or snapshot_id is required",
+                        "api_error": [
+                            "Either 'application_id' or 'snapshot_id' must be provided. "
+                            "Example: application_id='app-123'"
+                        ],
+                        "message": (
+                            "Either 'application_id' or 'snapshot_id' is required for "
+                            "'get_action_matches_by_id_and_time_window'. "
+                            "Example: application_id='app-123', window_size=3600000"
+                        ),
                     }
 
                 logger.info(f"[_handle_catalog_operation] Routing to get_action_matches_by_id_and_time_window with application_id={application_id}, snapshot_id={snapshot_id}")
@@ -406,9 +435,17 @@ Examples:
         if operation not in HISTORY_VALID_OPERATIONS:
             logger.warning(f"[_handle_history] Invalid operation: {operation}")
             return {
-                    "error": f"Invalid operation '{operation}' for history",
-                    "valid_operations": HISTORY_VALID_OPERATIONS
-                }
+                "elicitation_needed": True,
+                "reason": f"Invalid history operation: {operation!r}",
+                "api_error": [
+                    f"operation: {operation!r} is not valid for resource_type 'history'. "
+                    f"Must be one of: {HISTORY_VALID_OPERATIONS}"
+                ],
+                "message": (
+                    f"operation {operation!r} is not valid for resource_type 'history'. "
+                    f"Accepted values are: {HISTORY_VALID_OPERATIONS}."
+                ),
+            }
         try:
             # Route to specific history operation
             if operation == HISTORY_OP_LIST:
@@ -425,9 +462,10 @@ Examples:
 
                 if "error" in conversion_result:
                     return {
-                        "error": conversion_result["error"],
-                        "resource_type": RESOURCE_TYPE_HISTORY,
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": "invalid_time_params",
+                        "api_error": [conversion_result["error"]],
+                        "message": conversion_result["error"],
                     }
 
                 # Update the converted value
@@ -486,9 +524,10 @@ Examples:
 
                 if "error" in conversion_result:
                     return {
-                        "error": conversion_result["error"],
-                        "resource_type": RESOURCE_TYPE_HISTORY,
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": "invalid_time_params",
+                        "api_error": [conversion_result["error"]],
+                        "message": conversion_result["error"],
                     }
 
                 # Update the converted value
@@ -497,9 +536,16 @@ Examples:
                 if not action_instance_id:
                     logger.warning(f"[_handle_history] Missing required parameter: {PARAM_ACTION_INSTANCE_ID}")
                     return {
-                        "error": f"Missing required parameter: '{PARAM_ACTION_INSTANCE_ID}'",
-                        "resource_type": RESOURCE_TYPE_HISTORY,
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": f"history '{operation}': action_instance_id is required",
+                        "api_error": [
+                            "action_instance_id: required — provide the action run result UUID "
+                            "(obtain one from the history 'list' operation)"
+                        ],
+                        "message": (
+                            "action_instance_id is required for 'get_details'. "
+                            "Obtain it from the history 'list' operation first."
+                        ),
                     }
 
                 logger.info(f"Routing to get_action_instance_details with instance_id: {action_instance_id}")

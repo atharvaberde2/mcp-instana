@@ -230,12 +230,12 @@ class TestWebsiteAlertMCPTools(unittest.TestCase):
         )
 
     def test_find_website_alert_config_no_parameters(self):
-        """Test find_website_alert_config without id parameter returns error"""
+        """Test find_website_alert_config without id parameter returns elicitation"""
         result = asyncio.run(self.client.find_website_alert_config(id=None))
 
         self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn("id is required", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("id", result["message"])
 
     def test_find_website_alert_config_with_model_without_to_dict(self):
         """Test find_website_alert_config with valid response"""
@@ -389,12 +389,12 @@ class TestWebsiteAlertMCPTools(unittest.TestCase):
         self.assertIn("suggestion", result)
 
     def test_find_active_configs_missing_website_id(self):
-        """Test find_active_website_alert_configs without website_id"""
+        """Test find_active_website_alert_configs without website_id returns elicitation"""
         result = asyncio.run(self.client.find_active_website_alert_configs(website_id=""))
 
         self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn("website_id is required", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("website_id", result["message"])
 
     def test_find_active_configs_with_alert_ids_filter(self):
         """Test find_active_website_alert_configs with alert_ids filter"""
@@ -484,28 +484,28 @@ class TestWebsiteAlertMCPTools(unittest.TestCase):
         self.assertIn("Failed to get active website alert configs", result["error"])
 
     def test_find_active_configs_none_website_id(self):
-        """Test find_active_website_alert_configs with None website_id"""
+        """Test find_active_website_alert_configs with None website_id returns elicitation"""
         result = asyncio.run(self.client.find_active_website_alert_configs(website_id=None))
 
         self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn("website_id is required", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("website_id", result["message"])
 
     def test_find_config_missing_id(self):
-        """Test find_website_alert_config without id"""
+        """Test find_website_alert_config without id returns elicitation"""
         result = asyncio.run(self.client.find_website_alert_config(id=""))
 
         self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn("id is required", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("id", result["message"])
 
     def test_find_config_none_id(self):
-        """Test find_website_alert_config with None id"""
+        """Test find_website_alert_config with None id returns elicitation"""
         result = asyncio.run(self.client.find_website_alert_config(id=None))
 
         self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn("id is required", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("id", result["message"])
 
     def test_find_config_json_decode_error(self):
         """Test find_website_alert_config with invalid JSON"""

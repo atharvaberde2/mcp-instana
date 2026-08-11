@@ -108,7 +108,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify the result contains an error message
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Event with ID event-123 not found" in result["error"]
 
     @pytest.mark.asyncio
@@ -134,7 +134,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify the result contains an error message
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Event with ID event-123 not found" in result["error"]
 
     @pytest.mark.asyncio
@@ -1037,15 +1037,15 @@ class TestAgentMonitoringEventsE2E:
 
         # Test with empty event_ids
         result = await client.get_events_by_ids(event_ids=[])
-        assert "error" in result
-        assert "No event IDs provided" in result["error"]
+        assert "error" in result or result.get("elicitation_needed")
+        assert "event_ids is required" in (result.get("error") or result.get("message", ""))
 
         # Test with invalid list string
         with patch('ast.literal_eval') as mock_literal_eval:
             mock_literal_eval.side_effect = SyntaxError("Invalid syntax")
             result = await client.get_events_by_ids(event_ids="[invalid-list]")
-            assert "error" in result
-            assert "Invalid event_ids format" in result["error"]
+            assert "error" in result or result.get("elicitation_needed")
+            assert "Invalid event_ids format" in (result.get("error") or result.get("message", ""))
 
 
     @pytest.mark.asyncio
@@ -1422,8 +1422,8 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
-        assert "No event IDs provided" in result["error"]
+        assert "error" in result or result.get("elicitation_needed")
+        assert "event_ids is required" in (result.get("error") or result.get("message", ""))
 
 
     @pytest.mark.asyncio
@@ -1508,16 +1508,16 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify result contains error message
         assert isinstance(result, dict)
-        assert "error" in result
-        assert "event_id parameter is required" in result["error"]
+        assert "error" in result or result.get("elicitation_needed")
+        assert "event_id is required" in (result.get("error") or result.get("message", ""))
 
         # Test with None event_id
         result = await client.get_event(event_id=None, api_client=None)
 
         # Verify result contains error message
         assert isinstance(result, dict)
-        assert "error" in result
-        assert "event_id parameter is required" in result["error"]
+        assert "error" in result or result.get("elicitation_needed")
+        assert "event_id is required" in (result.get("error") or result.get("message", ""))
 
 
     @pytest.mark.asyncio
@@ -1549,7 +1549,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify result contains error about JSON parsing
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to parse JSON response" in result["error"]
         assert result["event_id"] == event_id
 
@@ -1580,7 +1580,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert result["error"] == "Failed to get event: Fallback Error"
         assert result["event_id"] == event_id
 
@@ -1656,7 +1656,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify 404 error response
         assert isinstance(result4, dict)
-        assert "error" in result4
+        assert "error" in result4 or result4.get("elicitation_needed")
         assert result4["error"] == "Event with ID non-existent not found"
         assert result4["event_id"] == "non-existent"
 
@@ -1717,7 +1717,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
 
 
     @pytest.mark.asyncio
@@ -1764,7 +1764,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Invalid event_ids format" in result["error"]
 
     @pytest.mark.asyncio
@@ -2010,7 +2010,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify the result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "event_id" in result
         assert result["event_id"] == "event-123"
 
@@ -2043,7 +2043,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify the result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "event_id" in result
         assert result["event_id"] == "event-123"
 
@@ -2072,7 +2072,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify the result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "event_id" in result
         assert result["event_id"] == "event-123"
 
@@ -2098,7 +2098,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify the result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert result["error"] == "Failed to get Kubernetes info events: API Error"
         assert "details" in result
         assert result["details"] == "API Error"
@@ -2224,7 +2224,7 @@ class TestAgentMonitoringEventsE2E:
 
         # Verify the result contains error information
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert result["error"] == "Failed to get agent monitoring events: API Error"
         assert "details" in result
         assert result["details"] == "API Error"
@@ -2621,7 +2621,7 @@ class TestAgentMonitoringEventsE2E:
 
         result = await client.get_events(filters={"severity": 99}, api_client=mock_api_client)
 
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
 
     @pytest.mark.asyncio
     @pytest.mark.mocked
@@ -2659,7 +2659,7 @@ class TestAgentMonitoringEventsE2E:
 
         result = await client.get_events(event_type_filters=["INVALID"], api_client=mock_api_client)
 
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
 
     @pytest.mark.asyncio
     @pytest.mark.mocked
@@ -2677,7 +2677,7 @@ class TestAgentMonitoringEventsE2E:
 
         result = await client.get_events(api_client=mock_api_client)
 
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
 
     @pytest.mark.asyncio
     @pytest.mark.mocked

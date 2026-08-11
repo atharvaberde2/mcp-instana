@@ -62,9 +62,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             operation="get_all"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid resource_type", result["error"])
-        self.assertIn("valid_resource_types", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid resource_type", (result.get("error") or result.get("message", "")))
 
     # Configuration Tests
     def test_config_get_all(self):
@@ -108,8 +107,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'id'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'id'", (result.get("error") or result.get("message", "")))
 
     def test_config_create(self):
         """Test configuration create operation."""
@@ -143,8 +142,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'payload'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("payload", (result.get("error") or result.get("message", "")))
 
     def test_config_update(self):
         """Test configuration update operation."""
@@ -172,8 +171,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={"id": "slo-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'payload'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("payload", (result.get("error") or result.get("message", "")))
 
     def test_config_delete(self):
         """Test configuration delete operation."""
@@ -199,8 +198,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'id'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'id'", (result.get("error") or result.get("message", "")))
 
     def test_config_get_tags(self):
         """Test configuration get_tags operation."""
@@ -226,8 +225,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     # Report Tests
     def test_report_get(self):
@@ -263,8 +262,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={"var_from": "1609459200000", "to": "1612137600000"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'slo_id'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'slo_id'", (result.get("error") or result.get("message", "")))
 
     def test_report_invalid_operation(self):
         """Test report with invalid operation."""
@@ -274,8 +273,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={"slo_id": "slo-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid report operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid report operation", (result.get("error") or result.get("message", "")))
 
     # Alert Tests
     def test_alert_find_active(self):
@@ -317,8 +316,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'id'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'id'", (result.get("error") or result.get("message", "")))
 
     def test_alert_find_versions(self):
         """Test alert find_versions operation."""
@@ -369,8 +368,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'payload'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("payload", (result.get("error") or result.get("message", "")))
 
     def test_alert_update(self):
         """Test alert update operation."""
@@ -397,8 +396,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={"id": "alert-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameters", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameters", (result.get("error") or result.get("message", "")))
 
     def test_alert_delete(self):
         """Test alert delete operation."""
@@ -468,8 +467,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={"id": "alert-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameters", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameters", (result.get("error") or result.get("message", "")))
 
     # Correction Tests
     def test_correction_get_all(self):
@@ -511,8 +510,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'id'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'id'", (result.get("error") or result.get("message", "")))
 
     def test_correction_create(self):
         """Test correction create operation."""
@@ -547,8 +546,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'payload'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("payload", (result.get("error") or result.get("message", "")))
 
     def test_correction_update(self):
         """Test correction update operation."""
@@ -578,8 +577,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={"id": "corr-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameters", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameters", (result.get("error") or result.get("message", "")))
 
     def test_correction_delete(self):
         """Test correction delete operation."""
@@ -604,8 +603,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Missing required parameter: 'id'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Missing required parameter 'id'", (result.get("error") or result.get("message", "")))
 
     def test_correction_invalid_operation(self):
         """Test correction with invalid operation."""
@@ -615,8 +614,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid correction operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid correction operation", (result.get("error") or result.get("message", "")))
 
     # Error Handling Tests
     def test_exception_handling(self):
@@ -631,8 +630,8 @@ class TestSLOSmartRouterTool(unittest.TestCase):
             operation="get_all"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Configuration operation error", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Configuration operation error", (result.get("error") or result.get("message", "")))
 
     def test_params_none(self):
         """Test handling when params is None."""

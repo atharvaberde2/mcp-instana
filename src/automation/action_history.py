@@ -4,6 +4,8 @@ Automation Action History MCP Tools Module
 This module provides automation action history tools for Instana Automation.
 """
 
+import ast
+import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
@@ -26,6 +28,8 @@ except ImportError:
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
+
+_VALID_ORDER_DIRECTIONS: frozenset = frozenset({"ASC", "DESC"})
 
 class ActionHistoryMCPTools(BaseInstanaClient):
     """Tools for automation action history in Instana MCP."""
@@ -86,7 +90,6 @@ class ActionHistoryMCPTools(BaseInstanaClient):
             if isinstance(payload, str):
                 logger.debug("Payload is a string, attempting to parse")
                 try:
-                    import json
                     try:
                         parsed_payload = json.loads(payload)
                         logger.debug("Successfully parsed payload as JSON")
@@ -102,7 +105,6 @@ class ActionHistoryMCPTools(BaseInstanaClient):
                             request_body = parsed_payload
                         except json.JSONDecodeError:
                             # Try as Python literal
-                            import ast
                             try:
                                 parsed_payload = ast.literal_eval(payload)
                                 logger.debug("Successfully parsed payload as Python literal")
@@ -187,8 +189,45 @@ class ActionHistoryMCPTools(BaseInstanaClient):
             Dict[str, Any]: The details of the automation action run result
         """
         try:
-            if not action_instance_id:
-                return {"error": "action_instance_id is required"}
+            # --- Pre-flight ---
+            if not action_instance_id or not str(action_instance_id).strip():
+                return {
+                    "elicitation_needed": True,
+                    "reason": "get_action_instance_details: action_instance_id is required",
+                    "api_error": [
+                        "action_instance_id: required — provide the action run result UUID "
+                        "(obtain from the history 'list' operation)"
+                    ],
+                    "message": (
+                        "action_instance_id is required. "
+                        "Obtain it from the history 'list' operation first."
+                    ),
+                }
+
+            errors: list = []
+            if window_size is not None:
+                if not isinstance(window_size, int):
+                    errors.append(
+                        f"window_size: must be a positive integer (milliseconds), "
+                        f"got {type(window_size).__name__!r}"
+                    )
+                elif window_size < 0:
+                    errors.append(
+                        f"window_size: {window_size} must be ≥ 0. "
+                        "Example: 600000 (10 minutes)"
+                    )
+            if errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"get_action_instance_details has {len(errors)} validation problem(s)",
+                    "api_error": errors,
+                    "message": (
+                        f"The get_action_instance_details call has {len(errors)} problem(s). "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e}" for e in errors)
+                    ),
+                }
+            # --- End pre-flight ---
 
             logger.debug(f"Getting action instance details for ID: {action_instance_id}")
             result = api_client.get_action_instance(
@@ -253,6 +292,24 @@ class ActionHistoryMCPTools(BaseInstanaClient):
             Dict[str, Any]: The paginated list of automation action run results
         """
         try:
+            errors = self._preflight_list_action_instances(
+                page=page,
+                page_size=page_size,
+                window_size=window_size,
+                order_direction=order_direction,
+            )
+            if errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"list_action_instances has {len(errors)} validation problem(s)",
+                    "api_error": errors,
+                    "message": (
+                        f"The list_action_instances call has {len(errors)} problem(s). "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e}" for e in errors)
+                    ),
+                }
+
             logger.debug("Getting action instances with parameters")
             result = api_client.get_action_instances(
                 window_size=window_size,
@@ -284,6 +341,52 @@ class ActionHistoryMCPTools(BaseInstanaClient):
         except Exception as e:
             logger.error(f"Error in list_action_instances: {e}")
             return {"error": f"Failed to list action instances: {e!s}"}
+
+    @staticmethod
+    def _preflight_list_action_instances(
+        page: Optional[int],
+        page_size: Optional[int],
+        window_size: Optional[int],
+        order_direction: Optional[str],
+    ) -> list:
+        """Validate list_action_instances parameters; return list of error strings."""
+        errors: list = []
+
+        if page is not None:
+            if not isinstance(page, int):
+                errors.append(
+                    f"page: must be an integer ≥ 1, got {type(page).__name__!r}"
+                )
+            elif page < 1:
+                errors.append(f"page: {page} must be ≥ 1 (1-based page number)")
+
+        if page_size is not None:
+            if not isinstance(page_size, int):
+                errors.append(
+                    f"page_size: must be an integer ≥ 1, got {type(page_size).__name__!r}"
+                )
+            elif page_size < 1:
+                errors.append(f"page_size: {page_size} must be ≥ 1")
+
+        if window_size is not None:
+            if not isinstance(window_size, int):
+                errors.append(
+                    f"window_size: must be a positive integer (milliseconds), "
+                    f"got {type(window_size).__name__!r}"
+                )
+            elif window_size < 0:
+                errors.append(
+                    f"window_size: {window_size} must be ≥ 0. "
+                    "Example: 3600000 (1 hour)"
+                )
+
+        if order_direction is not None and order_direction not in _VALID_ORDER_DIRECTIONS:
+            errors.append(
+                f"order_direction: '{order_direction}' is not valid. "
+                "Must be 'ASC' or 'DESC'"
+            )
+
+        return errors
 
     @with_header_auth(ActionHistoryApi)
     async def delete_action_instance(self,

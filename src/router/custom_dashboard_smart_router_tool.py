@@ -87,8 +87,16 @@ Examples:
 
             if operation not in valid_operations:
                 return {
-                    "error": f"Invalid operation '{operation}'",
-                    "valid_operations": valid_operations
+                    "elicitation_needed": True,
+                    "reason": f"Invalid operation: {operation!r}",
+                    "api_error": [
+                        f"operation: {operation!r} is not valid for custom dashboards. "
+                        f"Must be one of: {valid_operations}"
+                    ],
+                    "message": (
+                        f"operation {operation!r} is not valid. "
+                        f"Accepted values are: {valid_operations}."
+                    ),
                 }
 
             # Route to the dashboard client

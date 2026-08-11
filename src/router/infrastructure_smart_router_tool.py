@@ -232,8 +232,16 @@ Examples:
             valid_types = ["analyze", "catalog", "resources"]
             if resource_type not in valid_types:
                 return {
-                    "error": f"Invalid resource_type '{resource_type}'. Valid types: {', '.join(valid_types)}",
-                    "valid_types": valid_types
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"'{resource_type}' is not a valid resource type",
+                            "expected": valid_types
+                        }
+                    ],
+                    "message": f"Invalid resource_type '{resource_type}'. Must be one of: {valid_types}"
                 }
 
             # Route to the appropriate resource handler
@@ -245,8 +253,16 @@ Examples:
                 return await self._handle_resources(operation, params, ctx)
             else:
                 return {
-                    "error": f"Unsupported resource_type: {resource_type}",
-                    "supported_types": valid_types
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"Unsupported resource_type: {resource_type}",
+                            "expected": valid_types
+                        }
+                    ],
+                    "message": f"Unsupported resource_type '{resource_type}'. Must be one of: {valid_types}"
                 }
 
         except Exception as e:
@@ -272,8 +288,16 @@ Examples:
         # Validate operation
         if operation not in ANALYZE_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for analyze",
-                "valid_operations": ANALYZE_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid analyze operation",
+                        "expected": ANALYZE_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'analyze'. Valid operations: {ANALYZE_VALID_OPERATIONS}"
             }
 
         # Extract payload
@@ -281,14 +305,20 @@ Examples:
 
         if not payload:
             return {
-                "error": "Missing required parameter 'payload' for analyze operations",
-                "required_format": {
-                    "payload": {
-                        "type": "entity_type_from_get_plugins",
-                        "metrics": [{"metric": "metric_name", "granularity": 3600000, "aggregation": "MEAN"}],
-                        "timeFrame": {"windowSize": 3600000}
+                "elicitation_needed": True,
+                "reason": "missing_required_params",
+                "api_error": [
+                    {
+                        "field": "payload",
+                        "issue": "payload is required for analyze operations",
+                        "expected": {
+                            "type": "entity_type_from_get_plugins",
+                            "metrics": [{"metric": "metric_name", "granularity": 3600000, "aggregation": "MEAN"}],
+                            "timeFrame": {"windowSize": 3600000}
+                        }
                     }
-                }
+                ],
+                "message": "Missing required parameter 'payload'. Call get_plugins first to discover entity types."
             }
 
         # Auto-detect the correct operation based on payload content
@@ -340,8 +370,16 @@ Examples:
         # Validate operation
         if operation not in CATALOG_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for catalog",
-                "valid_operations": CATALOG_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid catalog operation",
+                        "expected": CATALOG_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'catalog'. Valid operations: {CATALOG_VALID_OPERATIONS}"
             }
 
         # Route to specific operation
@@ -355,8 +393,16 @@ Examples:
 
             if not plugin:
                 return {
-                    "error": "Missing required parameter 'plugin' for get_metrics operation",
-                    "hint": HINT_GET_PLUGINS_FIRST
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "plugin",
+                            "issue": "plugin is required for get_metrics",
+                            "hint": HINT_GET_PLUGINS_FIRST
+                        }
+                    ],
+                    "message": f"Missing required parameter 'plugin' for get_metrics. {HINT_GET_PLUGINS_FIRST}"
                 }
 
             logger.debug(f"Routing to Infrastructure Catalog Metrics | plugin={plugin}, filter={filter_type}")
@@ -371,8 +417,16 @@ Examples:
 
             if not plugin:
                 return {
-                    "error": "Missing required parameter 'plugin' for get_tag_catalog operation",
-                    "hint": HINT_GET_PLUGINS_FIRST
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "plugin",
+                            "issue": "plugin is required for get_tag_catalog",
+                            "hint": HINT_GET_PLUGINS_FIRST
+                        }
+                    ],
+                    "message": f"Missing required parameter 'plugin' for get_tag_catalog. {HINT_GET_PLUGINS_FIRST}"
                 }
 
             logger.debug(f"Routing to Infrastructure Tag Catalog | plugin={plugin}")
@@ -387,8 +441,16 @@ Examples:
 
             if not plugin:
                 return {
-                    "error": "Missing required parameter 'plugin' for get_plugin_schema operation",
-                    "hint": HINT_GET_PLUGINS_FIRST
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "plugin",
+                            "issue": "plugin is required for get_plugin_schema",
+                            "hint": HINT_GET_PLUGINS_FIRST
+                        }
+                    ],
+                    "message": f"Missing required parameter 'plugin' for get_plugin_schema. {HINT_GET_PLUGINS_FIRST}"
                 }
 
             logger.debug(f"Routing to Infrastructure Plugin Schema | plugin={plugin}, filter={filter_type}")
@@ -416,8 +478,16 @@ Examples:
         # Validate operation
         if operation not in RESOURCES_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for resources",
-                "valid_operations": RESOURCES_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid resources operation",
+                        "expected": RESOURCES_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'resources'. Valid operations: {RESOURCES_VALID_OPERATIONS}"
             }
 
         # Route to specific operation
@@ -428,8 +498,16 @@ Examples:
 
             if not snapshot_id:
                 return {
-                    "error": "Missing required parameter 'snapshot_id' for get_snapshot operation",
-                    "hint": "Provide the snapshot ID to retrieve its details"
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "snapshot_id",
+                            "issue": "snapshot_id is required for get_snapshot",
+                            "hint": "Provide the snapshot ID to retrieve its details. Use get_snapshots to discover available snapshot IDs."
+                        }
+                    ],
+                    "message": "Missing required parameter 'snapshot_id' for get_snapshot. Use get_snapshots to discover available IDs."
                 }
 
             logger.debug(f"Routing to Infrastructure Get Snapshot | snapshot_id={snapshot_id}")

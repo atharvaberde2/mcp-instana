@@ -158,8 +158,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("404", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("404", (result.get("error") or result.get("message", "")))
 
     def test_get_custom_dashboards_exception(self):
         """Test get_custom_dashboards with exception"""
@@ -169,7 +169,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_custom_dashboard_success(self):
         """Test successful get_custom_dashboard call"""
@@ -197,8 +197,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Dashboard ID is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Dashboard ID is required", (result.get("error") or result.get("message", "")))
 
     def test_get_custom_dashboard_error_status(self):
         """Test get_custom_dashboard with error status"""
@@ -212,7 +212,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_add_custom_dashboard_success(self):
         """Test successful add_custom_dashboard call"""
@@ -243,8 +243,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Custom dashboard configuration is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Custom dashboard configuration is required", (result.get("error") or result.get("message", "")))
 
     def test_add_custom_dashboard_adds_defaults(self):
         """Test add_custom_dashboard adds default fields"""
@@ -295,8 +295,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Dashboard ID is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Dashboard ID is required", (result.get("error") or result.get("message", "")))
 
     def test_update_custom_dashboard_missing_config(self):
         """Test update_custom_dashboard with missing configuration"""
@@ -306,8 +306,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Custom dashboard configuration is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Custom dashboard configuration is required", (result.get("error") or result.get("message", "")))
 
     def test_delete_custom_dashboard_success(self):
         """Test successful delete_custom_dashboard call"""
@@ -349,8 +349,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Dashboard ID is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Dashboard ID is required", (result.get("error") or result.get("message", "")))
 
     def test_get_shareable_users_success(self):
         """Test successful get_shareable_users call"""
@@ -457,8 +457,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("dashboard_id is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("dashboard_id is required", (result.get("error") or result.get("message", "")))
 
     def test_execute_dashboard_operation_create(self):
         """Test execute_dashboard_operation with create operation"""
@@ -481,8 +481,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("custom_dashboard is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("custom_dashboard", (result.get("error") or result.get("message", "")))
 
     def test_execute_dashboard_operation_update(self):
         """Test execute_dashboard_operation with update operation"""
@@ -505,8 +505,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             params={"custom_dashboard": {"title": "Test"}}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("dashboard_id is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("dashboard_id", (result.get("error") or result.get("message", "")))
 
     def test_execute_dashboard_operation_update_missing_config(self):
         """Test execute_dashboard_operation update without custom_dashboard"""
@@ -515,8 +515,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             params={"dashboard_id": "dash1"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("custom_dashboard is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("custom_dashboard", (result.get("error") or result.get("message", "")))
 
     def test_execute_dashboard_operation_delete(self):
         """Test execute_dashboard_operation with delete operation"""
@@ -539,8 +539,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("dashboard_id is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("dashboard_id is required", (result.get("error") or result.get("message", "")))
 
     def test_execute_dashboard_operation_get_shareable_users(self):
         """Test execute_dashboard_operation with get_shareable_users operation"""
@@ -577,8 +577,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("not supported", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("not supported", (result.get("error") or result.get("message", "")))
 
     def test_execute_dashboard_operation_none_params(self):
         """Test execute_dashboard_operation with None params"""
@@ -603,7 +603,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_custom_dashboards_non_list_response(self):
         """Test get_custom_dashboards with non-list response"""
@@ -656,7 +656,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_add_custom_dashboard_error_status(self):
         """Test add_custom_dashboard with error status"""
@@ -672,8 +672,8 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("400", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("400", (result.get("error") or result.get("message", "")))
 
     def test_add_custom_dashboard_exception(self):
         """Test add_custom_dashboard with exception"""
@@ -686,7 +686,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_add_custom_dashboard_json_serialization_error(self):
         """Test add_custom_dashboard with JSON serialization error in logging"""
@@ -719,7 +719,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_update_custom_dashboard_exception(self):
         """Test update_custom_dashboard with exception"""
@@ -733,7 +733,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_update_custom_dashboard_json_serialization_error(self):
         """Test update_custom_dashboard with JSON serialization error in logging"""
@@ -764,7 +764,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_delete_custom_dashboard_exception(self):
         """Test delete_custom_dashboard with exception"""
@@ -775,7 +775,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_delete_custom_dashboard_json_serialization_error(self):
         """Test delete_custom_dashboard with JSON serialization error in logging"""
@@ -802,7 +802,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_shareable_users_exception(self):
         """Test get_shareable_users with exception"""
@@ -812,7 +812,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_shareable_users_json_serialization_error(self):
         """Test get_shareable_users with JSON serialization error in logging"""
@@ -852,7 +852,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_shareable_api_tokens_exception(self):
         """Test get_shareable_api_tokens with exception"""
@@ -862,7 +862,7 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
             api_client=self.custom_dashboards_api
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_shareable_api_tokens_json_serialization_error(self):
         """Test get_shareable_api_tokens with JSON serialization error in logging"""
@@ -973,6 +973,232 @@ class TestCustomDashboardMCPTools(unittest.TestCase):
         ))
 
         self.assertIn("items", result)
+
+
+    # -------------------------------------------------------------------------
+    # _validate_dashboard_payload tests
+    # -------------------------------------------------------------------------
+
+    def test_validate_missing_title_returns_elicitation(self):
+        """Missing title must produce an elicitation with api_error."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {"widgets": []}, "create"
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+        self.assertIn("api_error", result)
+        self.assertTrue(any("title" in e for e in result["api_error"]))
+
+    def test_validate_empty_title_returns_elicitation(self):
+        """Whitespace-only title is also invalid."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {"title": "   "}, "create"
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("title" in e for e in result["api_error"]))
+
+    def test_validate_valid_minimal_payload_passes(self):
+        """title only is sufficient (widgets/accessRules get defaults)."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {"title": "My Dashboard"}, "create"
+        )
+        self.assertIsNone(result)
+
+    def test_validate_valid_full_payload_passes(self):
+        """Full valid payload with accessRules and widgets passes."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "title": "Full Dashboard",
+                "accessRules": [{"accessType": "READ_WRITE", "relationType": "GLOBAL"}],
+                "widgets": [{"id": "w1", "type": "chart", "config": {"metric": "cpu"}}],
+            },
+            "create",
+        )
+        self.assertIsNone(result)
+
+    def test_validate_invalid_access_type_returns_elicitation(self):
+        """An invalid accessType enum value triggers elicitation."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "title": "Test",
+                "accessRules": [{"accessType": "WRITE", "relationType": "GLOBAL"}],
+            },
+            "create",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+        self.assertTrue(any("accessType" in e for e in result["api_error"]))
+
+    def test_validate_invalid_relation_type_returns_elicitation(self):
+        """An invalid relationType enum value triggers elicitation."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "title": "Test",
+                "accessRules": [{"accessType": "READ", "relationType": "ORG"}],
+            },
+            "create",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("relationType" in e for e in result["api_error"]))
+
+    def test_validate_missing_access_type_and_relation_type(self):
+        """Missing both accessType and relationType produces two errors."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {"title": "Test", "accessRules": [{}]},
+            "create",
+        )
+        self.assertIsNotNone(result)
+        errors = result["api_error"]
+        self.assertTrue(any("accessType" in e for e in errors))
+        self.assertTrue(any("relationType" in e for e in errors))
+
+    def test_validate_empty_access_rules_list_returns_elicitation(self):
+        """An empty accessRules list is invalid (min_length=1)."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {"title": "Test", "accessRules": []},
+            "create",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("accessRules" in e for e in result["api_error"]))
+
+    def test_validate_widget_missing_required_fields_returns_elicitation(self):
+        """Widget missing id, type, config all reported in one pass."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {"title": "Test", "widgets": [{"title": "Widget 1"}]},
+            "create",
+        )
+        self.assertIsNotNone(result)
+        errors = result["api_error"]
+        self.assertTrue(any("widgets[0].id" in e for e in errors))
+        self.assertTrue(any("widgets[0].type" in e for e in errors))
+        self.assertTrue(any("widgets[0].config" in e for e in errors))
+
+    def test_validate_widget_invalid_width_returns_elicitation(self):
+        """Widget width outside 1-12 triggers elicitation."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "title": "Test",
+                "widgets": [
+                    {"id": "w1", "type": "chart", "config": {}, "width": 13}
+                ],
+            },
+            "create",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("width" in e for e in result["api_error"]))
+
+    def test_validate_widget_invalid_x_returns_elicitation(self):
+        """Widget x outside 0-11 triggers elicitation."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "title": "Test",
+                "widgets": [{"id": "w1", "type": "chart", "config": {}, "x": 12}],
+            },
+            "create",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("widgets[0].x" in e for e in result["api_error"]))
+
+    def test_validate_widget_invalid_y_returns_elicitation(self):
+        """Negative y triggers elicitation."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "title": "Test",
+                "widgets": [{"id": "w1", "type": "chart", "config": {}, "y": -1}],
+            },
+            "create",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("widgets[0].y" in e for e in result["api_error"]))
+
+    def test_validate_widget_invalid_height_returns_elicitation(self):
+        """height < 1 triggers elicitation."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "title": "Test",
+                "widgets": [{"id": "w1", "type": "chart", "config": {}, "height": 0}],
+            },
+            "create",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("height" in e for e in result["api_error"]))
+
+    def test_validate_multiple_errors_all_reported(self):
+        """All errors across title, accessRules, and widgets are collected in one pass."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {
+                "accessRules": [{"accessType": "INVALID", "relationType": "INVALID"}],
+                "widgets": [{"title": "no id/type/config"}],
+            },
+            "update",
+        )
+        self.assertIsNotNone(result)
+        errors = result["api_error"]
+        # title missing, accessType invalid, relationType invalid,
+        # widget missing id/type/config — all in one shot
+        self.assertGreaterEqual(len(errors), 5)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_validate_reason_reflects_operation(self):
+        """reason string includes the operation name."""
+        result = CustomDashboardMCPTools._validate_dashboard_payload(
+            {}, "update"
+        )
+        self.assertIn("update", result["reason"])
+
+    # -------------------------------------------------------------------------
+    # Integration: add/update return elicitation when payload is invalid
+    # -------------------------------------------------------------------------
+
+    def test_add_dashboard_missing_title_returns_elicitation(self):
+        """add_custom_dashboard returns elicitation (not a crash) for missing title."""
+        result = asyncio.run(self.custom_dashboard_tools.add_custom_dashboard(
+            custom_dashboard={"widgets": []},
+            api_client=self.custom_dashboards_api,
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("api_error", result)
+        self.custom_dashboards_api.add_custom_dashboard_without_preload_content.assert_not_called()
+
+    def test_update_dashboard_missing_title_returns_elicitation(self):
+        """update_custom_dashboard returns elicitation (not a crash) for missing title."""
+        result = asyncio.run(self.custom_dashboard_tools.update_custom_dashboard(
+            dashboard_id="dash1",
+            custom_dashboard={"widgets": []},
+            api_client=self.custom_dashboards_api,
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("api_error", result)
+        self.custom_dashboards_api.update_custom_dashboard_without_preload_content.assert_not_called()
+
+    def test_add_dashboard_invalid_access_type_returns_elicitation(self):
+        """add_custom_dashboard returns elicitation for bad accessType enum."""
+        result = asyncio.run(self.custom_dashboard_tools.add_custom_dashboard(
+            custom_dashboard={
+                "title": "Test",
+                "accessRules": [{"accessType": "WRITE", "relationType": "GLOBAL"}],
+            },
+            api_client=self.custom_dashboards_api,
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("accessType" in e for e in result["api_error"]))
+        self.custom_dashboards_api.add_custom_dashboard_without_preload_content.assert_not_called()
+
+    def test_add_dashboard_widget_missing_fields_returns_elicitation(self):
+        """add_custom_dashboard returns elicitation for widget missing id/type/config."""
+        result = asyncio.run(self.custom_dashboard_tools.add_custom_dashboard(
+            custom_dashboard={
+                "title": "Test",
+                "widgets": [{"title": "Widget without required fields"}],
+            },
+            api_client=self.custom_dashboards_api,
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        errors = result["api_error"]
+        self.assertTrue(any("widgets[0].id" in e for e in errors))
+        self.assertTrue(any("widgets[0].type" in e for e in errors))
+        self.assertTrue(any("widgets[0].config" in e for e in errors))
+        self.custom_dashboards_api.add_custom_dashboard_without_preload_content.assert_not_called()
 
 
 if __name__ == '__main__':

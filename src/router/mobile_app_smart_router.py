@@ -18,6 +18,7 @@ from src.core.utils import (
     normalize_beacon_type,
     register_as_tool,
 )
+from src.core.validation import VALID_MOBILE_BEACON_TYPES, StructureValidator
 
 logger = logging.getLogger(__name__)
 
@@ -286,10 +287,19 @@ Returns:
                 params = {}
 
             # Validate resource_type
-            if resource_type not in ["analyze", "catalog", "configuration", "advanced_config", "alert", "session_replay"]:
+            valid_types = ["analyze", "catalog", "configuration", "advanced_config", "alert", "session_replay"]
+            if resource_type not in valid_types:
                 return {
-                    "error": f"Invalid resource_type '{resource_type}'. Valid types: 'analyze', 'catalog', 'configuration', 'advanced_config', 'alert', 'session_replay'",
-                    "valid_types": ["analyze", "catalog", "configuration", "advanced_config", "alert", "session_replay"]
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"'{resource_type}' is not a valid resource type",
+                            "expected": valid_types
+                        }
+                    ],
+                    "message": f"Invalid resource_type '{resource_type}'. Must be one of: {valid_types}"
                 }
 
             # Route to the appropriate resource handler
@@ -307,8 +317,16 @@ Returns:
                 return await self._handle_session_replay(operation, params, ctx)
             else:
                 return {
-                    "error": f"Unsupported resource_type: {resource_type}",
-                    "supported_types": ["analyze", "catalog", "configuration", "advanced_config", "alert", "session_replay"]
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"Unsupported resource_type: {resource_type}",
+                            "expected": ["analyze", "catalog", "configuration", "advanced_config", "alert", "session_replay"]
+                        }
+                    ],
+                    "message": f"Unsupported resource_type '{resource_type}'. Must be one of: analyze, catalog, configuration, advanced_config, alert, session_replay"
                 }
 
         except Exception as e:
@@ -334,8 +352,16 @@ Returns:
         # Validate operation
         if operation not in ANALYZE_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for analyze",
-                "valid_operations": ANALYZE_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid analyze operation",
+                        "expected": ANALYZE_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'analyze'. Valid operations: {ANALYZE_VALID_OPERATIONS}"
             }
 
         # Extract individual parameters from params dict
@@ -359,17 +385,51 @@ Returns:
 
         if "error" in conversion_result:
             return {
-                "error": conversion_result["error"],
-                "resource_type": "analyze",
-                "operation": operation,
-                "original_params": params,
-                "hint": "Provide time_frame.to as Unix timestamp (ms) or datetime string with timezone (e.g., '10 March 2026, 2:00 PM|IST')"
+                "elicitation_needed": True,
+                "reason": "invalid_time_params",
+                "api_error": [
+                    {
+                        "field": "time_frame.to",
+                        "issue": conversion_result["error"],
+                        "expected": "Unix timestamp (ms) or datetime string with timezone (e.g., '10 March 2026, 2:00 PM|IST')"
+                    }
+                ],
+                "message": conversion_result["error"]
             }
 
         # Update time_frame with converted value if conversion occurred
         if conversion_result["converted"]:
             time_frame = conversion_result["params"][PARAM_TIME_FRAME]
 
+        # --- Pre-flight structural validation: collect ALL errors in one pass ---
+        # This prevents invalid payloads from ever reaching the service layer or
+        # the API, avoiding unnecessary API calls and rate-limit exhaustion.
+        _sv_errors: List[str] = []
+        for _sv_fn, _sv_val, _sv_kw in [
+            (StructureValidator.validate_beacon_type, beacon_type,
+                {"valid_types": VALID_MOBILE_BEACON_TYPES}),
+            (StructureValidator.validate_metrics_array, metrics, {"required": False}),
+            (StructureValidator.validate_group, group, {"required": False}),
+            (StructureValidator.validate_tag_filter_expression, tag_filter_expression, {}),
+            (StructureValidator.validate_time_frame, time_frame, {}),
+            (StructureValidator.validate_order, order, {}),
+            (StructureValidator.validate_pagination, pagination, {}),
+        ]:
+            _sv_res = _sv_fn(_sv_val, **_sv_kw)
+            if _sv_res:
+                _sv_errors.extend(_sv_res["api_error"])
+        if _sv_errors:
+            return {
+                "elicitation_needed": True,
+                "reason": f"analyze '{operation}' payload has {len(_sv_errors)} validation problem(s)",
+                "api_error": _sv_errors,
+                "message": (
+                    f"The analyze '{operation}' payload has {len(_sv_errors)} problem(s). "
+                    "Correct all issues below and retry:\n"
+                    + "\n".join(f"  - {e}" for e in _sv_errors)
+                ),
+            }
+        # --- End pre-flight validation ---
 
         # Route to specific operation
         if operation == "get_mobile_app_beacon_groups":
@@ -430,8 +490,16 @@ Returns:
         # Validate operation
         if operation not in CATALOG_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for catalog",
-                "valid_operations": CATALOG_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid catalog operation",
+                        "expected": CATALOG_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'catalog'. Valid operations: {CATALOG_VALID_OPERATIONS}"
             }
 
         # Initialize result to avoid unbound variable error
@@ -453,6 +521,26 @@ Returns:
                 f"beacon_type={beacon_type}, use_case={use_case}"
             )
 
+            # Pre-flight: reject unrecognised beacon_type BEFORE normalizing —
+            # validation uses the canonical SCREAMING_SNAKE set; normalization
+            # only converts valid members to the camelCase form the API expects.
+            if beacon_type is not None and beacon_type not in VALID_MOBILE_BEACON_TYPES:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "invalid_beacon_type",
+                    "api_error": [
+                        {
+                            "field": "beacon_type",
+                            "issue": f"'{beacon_type}' is not a valid mobile app beacon type",
+                            "expected": sorted(VALID_MOBILE_BEACON_TYPES)
+                        }
+                    ],
+                    "message": (
+                        f"beacon_type '{beacon_type}' is not valid for mobile app. "
+                        f"Valid values: {sorted(VALID_MOBILE_BEACON_TYPES)}"
+                    )
+                }
+
             # Normalize beacon_type to camelCase format (API expects camelCase)
             normalized_beacon_type = normalize_beacon_type(beacon_type, MOBILE_BEACON_TYPE_MAP)
             if beacon_type != normalized_beacon_type:
@@ -468,8 +556,16 @@ Returns:
         else:
             # This should never happen due to validation above, but handle it gracefully
             return {
-                "error": f"Unhandled operation '{operation}' for catalog",
-                "valid_operations": CATALOG_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"Unhandled operation '{operation}' for catalog",
+                        "expected": CATALOG_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Unhandled operation '{operation}' for resource_type 'catalog'. Valid operations: {CATALOG_VALID_OPERATIONS}"
             }
 
         # Return structured response
@@ -490,8 +586,16 @@ Returns:
         # Validate operation
         if operation not in CONFIGURATION_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for configuration",
-                "valid_operations": CONFIGURATION_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid configuration operation",
+                        "expected": CONFIGURATION_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'configuration'. Valid operations: {CONFIGURATION_VALID_OPERATIONS}"
             }
 
         mobile_app_id = params.get(PARAM_MOBILE_APP_ID)
@@ -525,9 +629,17 @@ Returns:
         """
         if operation not in ADVANCED_CONFIG_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for advanced_config",
-                "valid_operations": ADVANCED_CONFIG_VALID_OPERATIONS,
-                "note": "Only GET operations are supported. Use Instana UI for modifications."
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid advanced_config operation",
+                        "expected": ADVANCED_CONFIG_VALID_OPERATIONS,
+                        "note": "Only GET operations are supported. Use Instana UI for modifications."
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'advanced_config'. Valid operations: {ADVANCED_CONFIG_VALID_OPERATIONS}"
             }
 
         # Extract parameters
@@ -564,8 +676,16 @@ Returns:
         # Validate operation
         if operation not in ALERT_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for alert",
-                "valid_operations": ALERT_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid alert operation",
+                        "expected": ALERT_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'alert'. Valid operations: {ALERT_VALID_OPERATIONS}"
             }
 
         # Initialize result to avoid unbound variable error
@@ -575,6 +695,21 @@ Returns:
         if operation == "find_active_mobile_app_alert_configs":
             mobile_app_id = params.get(PARAM_MOBILE_APP_ID)
             alert_ids = params.get(PARAM_ALERT_IDS)
+
+            # Pre-flight: mobile_app_id is required
+            if not mobile_app_id:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "mobile_app_id",
+                            "issue": "mobile_app_id is required for find_active_mobile_app_alert_configs",
+                            "hint": "Use resource_type='configuration', operation='get_all' to list available mobile app IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'mobile_app_id'. Use configuration/get_all to list available mobile app IDs."
+                }
 
             logger.debug(f"Routing to find_active_mobile_app_alert_configs with mobile_app_id={mobile_app_id}")
             result = await self.mobile_app_alert_client.find_active_mobile_app_alert_configs(
@@ -586,6 +721,21 @@ Returns:
             alert_id = params.get(PARAM_ALERT_ID)
             valid_on = params.get(PARAM_VALID_ON)
 
+            # Pre-flight: id is required
+            if not alert_id:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "id",
+                            "issue": "id is required for find_mobile_app_alert_config",
+                            "hint": "Use resource_type='alert', operation='find_active_mobile_app_alert_configs' to list available alert config IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'id'. Use alert/find_active_mobile_app_alert_configs to list available IDs."
+                }
+
             logger.debug(f"Routing to find_mobile_app_alert_config with id={alert_id}")
             result = await self.mobile_app_alert_client.find_mobile_app_alert_config(
                 id=alert_id,
@@ -595,8 +745,16 @@ Returns:
         else:
             # This should never happen due to validation above, but handle it gracefully
             return {
-                "error": f"Unhandled operation '{operation}' for alert",
-                "valid_operations": ALERT_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"Unhandled operation '{operation}' for alert",
+                        "expected": ALERT_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Unhandled operation '{operation}' for resource_type 'alert'. Valid operations: {ALERT_VALID_OPERATIONS}"
             }
 
         # Return structured response
@@ -617,8 +775,16 @@ Returns:
         # Validate operation
         if operation not in SESSION_REPLAY_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for session replay",
-                "valid_operations": SESSION_REPLAY_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid session_replay operation",
+                        "expected": SESSION_REPLAY_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'session_replay'. Valid operations: {SESSION_REPLAY_VALID_OPERATIONS}"
             }
 
         # Initialize result to avoid unbound variable error
@@ -631,6 +797,44 @@ Returns:
             cursor = params.get(PARAM_CURSOR)
             page_size = params.get(PARAM_PAGE_SIZE)
 
+            # Pre-flight: collect all errors in a single pass
+            _errors = []
+            if not mobile_app_id:
+                _errors.append({
+                    "field": "mobile_app_id",
+                    "issue": "mobile_app_id is required for get_session_replay_action_beacons",
+                    "hint": "Use resource_type='configuration', operation='get_all' to list available mobile app IDs"
+                })
+            if not session_id:
+                _errors.append({
+                    "field": "session_id",
+                    "issue": "session_id is required for get_session_replay_action_beacons",
+                    "hint": "Obtain the session_id from mobile app beacon data"
+                })
+            if page_size is not None and not isinstance(page_size, int):
+                _errors.append({
+                    "field": "page_size",
+                    "issue": f"page_size must be an integer, got {type(page_size).__name__!r}",
+                    "expected": "Integer between 1 and 1000"
+                })
+            elif page_size is not None and (page_size < 1 or page_size > 1000):
+                _errors.append({
+                    "field": "page_size",
+                    "issue": f"page_size {page_size} is out of range",
+                    "expected": "Integer between 1 and 1000"
+                })
+            if _errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"get_session_replay_action_beacons has {len(_errors)} missing/invalid parameter(s)",
+                    "api_error": _errors,
+                    "message": (
+                        f"get_session_replay_action_beacons has {len(_errors)} problem(s). "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e['field']}: {e['issue']}" for e in _errors)
+                    )
+                }
+
             logger.debug(f"Routing to get_session_replay_action_beacons with mobile_app_id={mobile_app_id} and session_id={session_id}")
             result = await self.mobile_app_session_replay_client.get_session_replay_action_beacons(
                 mobile_app_id=mobile_app_id,
@@ -642,8 +846,16 @@ Returns:
         else:
             # This should never happen due to validation above, but handle it gracefully
             return {
-                "error": f"Unhandled operation '{operation}' for session replay",
-                "valid_operations": SESSION_REPLAY_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"Unhandled operation '{operation}' for session_replay",
+                        "expected": SESSION_REPLAY_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Unhandled operation '{operation}' for resource_type 'session_replay'. Valid operations: {SESSION_REPLAY_VALID_OPERATIONS}"
             }
 
         # Return structured response

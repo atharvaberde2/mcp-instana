@@ -23,6 +23,7 @@ except ImportError as e:
     raise
 
 from src.core.utils import BaseInstanaClient, register_as_tool, with_header_auth
+from src.core.validation import BooleanCoercer, StructureValidator
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -39,6 +40,114 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
     #     title="Get Grouped Calls Metrics",
     #     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False)
     # )
+    @staticmethod
+    def _validate_call_group_structure(
+        metrics: Optional[List[Dict[str, Any]]],
+        time_frame: Optional[Dict[str, int]],
+        group: Optional[Dict[str, str]],
+        tag_filter_expression: Optional[Dict[str, Any]],
+        order: Optional[Dict[str, str]],
+        pagination: Optional[Dict[str, int]],
+    ) -> Optional[Dict[str, Any]]:
+        """Run structural validators; return an elicitation dict on failure, else None."""
+        all_errors: List[str] = []
+        for validator_fn, field_val, kwargs in [
+            (StructureValidator.validate_metrics_array, metrics, {"required": False}),
+            (StructureValidator.validate_group, group, {"required": False}),
+            (StructureValidator.validate_tag_filter_expression, tag_filter_expression, {}),
+            (StructureValidator.validate_order, order, {}),
+            (StructureValidator.validate_pagination, pagination, {}),
+            (StructureValidator.validate_time_frame, time_frame, {}),
+        ]:
+            result = validator_fn(field_val, **kwargs)
+            if result:
+                all_errors.extend(result["api_error"])
+        if not all_errors:
+            return None
+        return {
+            "elicitation_needed": True,
+            "reason": f"get_grouped_calls_metrics payload has {len(all_errors)} validation problem(s)",
+            "api_error": all_errors,
+            "message": (
+                f"The get_grouped_calls_metrics payload has {len(all_errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in all_errors)
+            ),
+        }
+
+    @staticmethod
+    def _apply_call_group_defaults(
+        metrics: Optional[List[Dict[str, Any]]],
+        time_frame: Optional[Dict[str, int]],
+        group: Optional[Dict[str, str]],
+    ) -> tuple:
+        """Return (metrics, time_frame, group) with defaults applied where None/empty."""
+        if not time_frame:
+            time_frame = {
+                "to": int(datetime.now().timestamp() * 1000),
+                "windowSize": 3600000,
+            }
+        if not metrics:
+            metrics = [
+                {"metric": "calls", "aggregation": "SUM"},
+                {"metric": "latency", "aggregation": "MEAN"},
+            ]
+        if not group:
+            group = {"groupbyTag": "service.name", "groupbyTagEntity": "DESTINATION"}
+        return metrics, time_frame, group
+
+    @staticmethod
+    def _build_call_group_request(
+        metrics: List[Dict[str, Any]],
+        time_frame: Dict[str, int],
+        group: Dict[str, str],
+        tag_filter_expression: Optional[Dict[str, Any]],
+        order: Optional[Dict[str, str]],
+        pagination: Optional[Dict[str, int]],
+        include_internal: Optional[bool],
+        include_synthetic: Optional[bool],
+    ) -> Dict[str, Any]:
+        """Assemble the camelCase SDK request body from validated parameters."""
+        body: Dict[str, Any] = {
+            "group": group,
+            "metrics": metrics,
+            "timeFrame": time_frame,
+        }
+        if tag_filter_expression:
+            body["tagFilterExpression"] = tag_filter_expression
+        if pagination:
+            body["pagination"] = pagination
+        if order:
+            body["order"] = order
+        if include_internal is not None:
+            body["includeInternal"] = include_internal
+        if include_synthetic is not None:
+            body["includeSynthetic"] = include_synthetic
+        return body
+
+    @staticmethod
+    def _log_response_item(idx: int, item: Any) -> None:
+        """Log debug info for a single response item."""
+        logger.debug(f"\nGroup {idx}:")
+        logger.debug(f"  Keys: {item.keys() if isinstance(item, dict) else 'N/A'}")
+        if isinstance(item, dict) and "metrics" in item:
+            logger.debug(f"  Metrics: {item['metrics'].keys() if isinstance(item['metrics'], dict) else item['metrics']}")
+
+    @staticmethod
+    def _log_call_group_response(result_dict: Any) -> None:
+        """Emit debug-level diagnostics for the raw API response."""
+        logger.debug("=" * 80)
+        logger.debug("📥 INSTANA API RESPONSE DEBUG - CALL GROUPS")
+        logger.debug("=" * 80)
+        logger.debug(f"Response Type: {type(result_dict)}")
+        logger.debug(f"Response Keys: {result_dict.keys() if isinstance(result_dict, dict) else 'N/A'}")
+        if isinstance(result_dict, dict) and "items" in result_dict:
+            logger.debug(f"Number of groups: {len(result_dict['items'])}")
+            for idx, item in enumerate(result_dict["items"][:3]):
+                ApplicationCallGroupMCPTools._log_response_item(idx, item)
+        logger.debug("=" * 80)
+        logger.debug(f"Full Result: {result_dict}")
+
     @with_header_auth(ApplicationAnalyzeApi)
     async def get_grouped_calls_metrics(
         self,
@@ -99,63 +208,27 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
         try:
             logger.debug(f"get_grouped_calls_metrics called with metrics={metrics}, group={group}")
 
-            # Two-Pass Elicitation: Check for required and recommended parameters
-            elicitation_request = self._check_elicitation_for_call_group_metrics(
-                metrics, time_frame, group
-            )
+            include_internal = BooleanCoercer.coerce(include_internal) if include_internal is not None else include_internal
+            include_synthetic = BooleanCoercer.coerce(include_synthetic) if include_synthetic is not None else include_synthetic
+
+            elicitation_request = self._check_elicitation_for_call_group_metrics(metrics, time_frame, group)
             if elicitation_request:
                 logger.info("Elicitation needed for call group metrics")
                 return elicitation_request
 
-            # Set default time range if not provided
-            if not time_frame:
-                to_time = int(datetime.now().timestamp() * 1000)
-                time_frame = {
-                    "to": to_time,
-                    "windowSize": 3600000  # Default to 1 hour
-                }
+            validation_error = self._validate_call_group_structure(
+                metrics, time_frame, group, tag_filter_expression, order, pagination
+            )
+            if validation_error:
+                return validation_error
 
-            # Set default metrics if not provided
-            if not metrics:
-                metrics = [
-                    {
-                        "metric": "calls",
-                        "aggregation": "SUM"
-                    },
-                    {
-                        "metric": "latency",
-                        "aggregation": "MEAN"
-                    }
-                ]
+            metrics, time_frame, group = self._apply_call_group_defaults(metrics, time_frame, group)
 
-            # Set default group if not provided
-            if not group:
-                group = {
-                    "groupbyTag": "service.name",
-                    "groupbyTagEntity": "DESTINATION"
-                }
+            request_body = self._build_call_group_request(
+                metrics, time_frame, group, tag_filter_expression, order, pagination,
+                include_internal, include_synthetic,
+            )
 
-            # Build complete request body with all parameters
-            # IMPORTANT: SDK expects camelCase keys (aliases), not snake_case
-            request_body = {}
-            if group:
-                request_body["group"] = group
-            if metrics:
-                request_body["metrics"] = metrics
-            if tag_filter_expression:
-                request_body["tagFilterExpression"] = tag_filter_expression  # camelCase!
-            if time_frame:
-                request_body["timeFrame"] = time_frame  # camelCase!
-            if pagination:
-                request_body["pagination"] = pagination
-            if order:
-                request_body["order"] = order
-            if include_internal is not None:
-                request_body["includeInternal"] = include_internal  # camelCase!
-            if include_synthetic is not None:
-                request_body["includeSynthetic"] = include_synthetic  # camelCase!
-
-            # 🔍 DEBUG: Log the request body BEFORE SDK conversion
             logger.debug("=" * 80)
             logger.debug("📤 REQUEST BODY DEBUG - BEFORE SDK CONVERSION")
             logger.debug("=" * 80)
@@ -164,60 +237,27 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
             logger.debug(f"Full Request Body: {request_body}")
             logger.debug("=" * 80)
 
-            # Use from_dict to properly convert nested objects to SDK model types
             logger.debug(f"Creating GetCallGroups from request_body: {request_body}")
             get_call_groups = GetCallGroups.from_dict(request_body)
             logger.debug("Successfully created GetCallGroups object")
 
-            # 🔍 DEBUG: Log the SDK object AFTER conversion
             logger.debug("=" * 80)
             logger.debug("📦 SDK OBJECT DEBUG - AFTER CONVERSION")
             logger.debug("=" * 80)
             if hasattr(get_call_groups, 'to_dict'):
-                sdk_dict = get_call_groups.to_dict()
-                logger.debug(f"SDK Object as Dict: {sdk_dict}")
+                logger.debug(f"SDK Object as Dict: {get_call_groups.to_dict()}")
             logger.debug("=" * 80)
 
-            # Call the get_call_group method from the SDK
             logger.debug("Calling get_call_group with GetCallGroups object")
             result = api_client.get_call_group(
                 get_call_groups=get_call_groups,
-                fill_time_series=fill_time_series
+                fill_time_series=fill_time_series,
             )
 
+            result_dict = result.to_dict() if hasattr(result, 'to_dict') else result
+            self._log_call_group_response(result_dict)
 
-            # Convert the result to a dictionary
-            if hasattr(result, 'to_dict'):
-                result_dict = result.to_dict()
-            else:
-                # If it's already a dict or another format, use it as is
-                result_dict = result
-
-            # 🔍 DEBUG: Log the API response structure and data
-            logger.debug("=" * 80)
-            logger.debug("📥 INSTANA API RESPONSE DEBUG - CALL GROUPS")
-            logger.debug("=" * 80)
-            logger.debug(f"Response Type: {type(result_dict)}")
-            logger.debug(f"Response Keys: {result_dict.keys() if isinstance(result_dict, dict) else 'N/A'}")
-
-            # Log detailed structure for each group
-            if isinstance(result_dict, dict) and 'items' in result_dict:
-                logger.debug(f"Number of groups: {len(result_dict['items'])}")
-                for idx, item in enumerate(result_dict['items'][:3]):  # Log first 3 items
-                    logger.debug(f"\nGroup {idx}:")
-                    logger.debug(f"  Keys: {item.keys() if isinstance(item, dict) else 'N/A'}")
-                    if isinstance(item, dict):
-                        if 'metrics' in item:
-                            logger.debug(f"  Metrics: {item['metrics'].keys() if isinstance(item['metrics'], dict) else item['metrics']}")
-
-            logger.debug("=" * 80)
-            logger.debug(f"Full Result: {result_dict}")
-
-            # Post-process the response to make it more LLM-friendly
             processed_result = self._process_metrics_response(result_dict)
-
-            # Check if we should aggregate results (no grouping needed in output)
-            # This happens when group is provided but user wants overall metrics only
             if group and self._should_aggregate_results(metrics, group):
                 processed_result = self._aggregate_grouped_results(processed_result, metrics)
 
@@ -225,6 +265,67 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
         except Exception as e:
             logger.error(f"Error in get_grouped_calls_metrics: {e}", exc_info=True)
             return {"error": f"Failed to get grouped calls metrics: {e!s}"}
+
+    @staticmethod
+    def _extract_metric_entry(metric_key: str, metric_data: Any) -> tuple:
+        """Return (extracted_entry, metric_name, value) for a single metric data array, or (None, None, None)."""
+        if not (isinstance(metric_data, list) and metric_data):
+            return None, None, None
+        first = metric_data[0]
+        if not (isinstance(first, list) and len(first) >= 2):
+            return None, None, None
+        timestamp, value = first[0], first[1]
+        entry = {"timestamp": timestamp, "value": value, "raw_data": metric_data}
+        return entry, metric_key.split('.')[0], value
+
+    @staticmethod
+    def _build_metric_summary(metric_name: str, value: Any, summary: Dict[str, Any]) -> None:
+        """Populate the human-readable summary dict in-place for a single metric."""
+        if metric_name == 'errors':
+            summary['error_rate'] = f"{value * 100:.2f}%"
+            summary['error_rate_decimal'] = value
+        elif metric_name == 'calls':
+            summary['total_calls'] = int(value)
+        elif metric_name == 'latency':
+            summary['latency_ms'] = f"{value:.2f}ms"
+        elif metric_name == 'erroneousCalls':
+            summary['erroneous_calls'] = int(value)
+
+    @staticmethod
+    def _build_interpretation(metric_summary: Dict[str, Any]) -> str:
+        """Compose a pipe-separated interpretation string from the metric summary."""
+        parts = []
+        if 'error_rate' in metric_summary:
+            parts.append(f"Error Rate: {metric_summary['error_rate']}")
+        if 'total_calls' in metric_summary:
+            parts.append(f"Total Calls: {metric_summary['total_calls']}")
+        if 'erroneous_calls' in metric_summary:
+            parts.append(f"Erroneous Calls: {metric_summary['erroneous_calls']}")
+        if 'latency_ms' in metric_summary:
+            parts.append(f"Latency: {metric_summary['latency_ms']}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _process_item_metrics(item: Dict[str, Any]) -> Dict[str, Any]:
+        """Enrich a single response item with extracted metrics, summary, and interpretation."""
+        processed_item = item.copy()
+        raw_metrics = item.get('metrics')
+        if not isinstance(raw_metrics, dict):
+            return processed_item
+
+        extracted_metrics: Dict[str, Any] = {}
+        metric_summary: Dict[str, Any] = {}
+        for metric_key, metric_data in raw_metrics.items():
+            entry, metric_name, value = ApplicationCallGroupMCPTools._extract_metric_entry(metric_key, metric_data)
+            if entry is not None:
+                extracted_metrics[metric_key] = entry
+                ApplicationCallGroupMCPTools._build_metric_summary(metric_name, value, metric_summary)
+
+        processed_item['metrics_extracted'] = extracted_metrics
+        processed_item['metrics_summary'] = metric_summary
+        if metric_summary:
+            processed_item['interpretation'] = ApplicationCallGroupMCPTools._build_interpretation(metric_summary)
+        return processed_item
 
     def _process_metrics_response(self, result_dict: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -253,71 +354,18 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
                 if not isinstance(item, dict):
                     processed_items.append(item)
                     continue
-
-                processed_item = item.copy()
-
-                # Extract metric values from nested arrays
-                if 'metrics' in item and isinstance(item['metrics'], dict):
-                    extracted_metrics = {}
-                    metric_summary = {}
-
-                    for metric_key, metric_data in item['metrics'].items():
-                        # metric_key format: "metric_name.aggregation" (e.g., "errors.mean", "calls.sum")
-                        if isinstance(metric_data, list) and len(metric_data) > 0:
-                            # Extract the latest value from [timestamp, value] pairs
-                            if isinstance(metric_data[0], list) and len(metric_data[0]) >= 2:
-                                timestamp, value = metric_data[0][0], metric_data[0][1]
-                                extracted_metrics[metric_key] = {
-                                    "timestamp": timestamp,
-                                    "value": value,
-                                    "raw_data": metric_data  # Keep original for reference
-                                }
-
-                                # Create human-readable summary
-                                metric_name = metric_key.split('.')[0]
-                                if metric_name == 'errors':
-                                    metric_summary['error_rate'] = f"{value * 100:.2f}%"
-                                    metric_summary['error_rate_decimal'] = value
-                                elif metric_name == 'calls':
-                                    metric_summary['total_calls'] = int(value)
-                                elif metric_name == 'latency':
-                                    metric_summary['latency_ms'] = f"{value:.2f}ms"
-                                elif metric_name == 'erroneousCalls':
-                                    metric_summary['erroneous_calls'] = int(value)
-
-                    processed_item['metrics_extracted'] = extracted_metrics
-                    processed_item['metrics_summary'] = metric_summary
-
-                    # Add interpretation note
-                    if metric_summary:
-                        interpretation = []
-                        if 'error_rate' in metric_summary:
-                            interpretation.append(f"Error Rate: {metric_summary['error_rate']}")
-                        if 'total_calls' in metric_summary:
-                            interpretation.append(f"Total Calls: {metric_summary['total_calls']}")
-                        if 'erroneous_calls' in metric_summary:
-                            interpretation.append(f"Erroneous Calls: {metric_summary['erroneous_calls']}")
-                        if 'latency_ms' in metric_summary:
-                            interpretation.append(f"Latency: {metric_summary['latency_ms']}")
-
-                        processed_item['interpretation'] = " | ".join(interpretation)
-
-                processed_items.append(processed_item)
+                processed_items.append(self._process_item_metrics(item))
 
             result_dict['items'] = processed_items
-
-            # Add a summary at the top level
             if processed_items:
                 result_dict['summary'] = {
                     "total_groups": len(processed_items),
-                    "note": "Check 'metrics_summary' and 'interpretation' fields in each item for human-readable values"
+                    "note": "Check 'metrics_summary' and 'interpretation' fields in each item for human-readable values",
                 }
-
             return result_dict
 
         except Exception as e:
             logger.error(f"Error processing metrics response: {e}", exc_info=True)
-            # Return original if processing fails
             return result_dict
 
     def _should_aggregate_results(
@@ -353,6 +401,45 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
 
         return False
 
+    @staticmethod
+    def _accumulate_metric_value(
+        metric_key: str,
+        metric_info: Any,
+        aggregated: Dict[str, float],
+        counts: Dict[str, int],
+    ) -> None:
+        """Add a single metric value to the running totals in-place."""
+        if isinstance(metric_info, dict):
+            value = metric_info.get('value', 0)
+        elif isinstance(metric_info, (int, float)):
+            value = metric_info
+        else:
+            return
+        aggregated.setdefault(metric_key, 0)
+        counts.setdefault(metric_key, 0)
+        aggregated[metric_key] += value
+        counts[metric_key] += 1
+
+    @staticmethod
+    def _compute_overall_metrics(
+        aggregated: Dict[str, float],
+        counts: Dict[str, int],
+    ) -> Dict[str, Any]:
+        """Convert running totals into per-key average dicts."""
+        overall: Dict[str, Any] = {}
+        for metric_key, total in aggregated.items():
+            count = counts.get(metric_key, 1)
+            if count <= 0:
+                continue
+            is_latency_mean = 'latency' in metric_key.lower() and 'mean' in metric_key.lower()
+            if is_latency_mean:
+                overall[metric_key] = {"value": total / count, "unit": "ms", "aggregation": "MEAN",
+                                       "note": f"Average across {count} endpoints"}
+            else:
+                overall[metric_key] = {"value": total / count, "aggregation": "MEAN",
+                                       "note": f"Average across {count} groups"}
+        return overall
+
     def _aggregate_grouped_results(
         self,
         result_dict: Dict[str, Any],
@@ -377,69 +464,26 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
 
             items = result_dict.get('items', [])
             if not items:
-                return {
-                    "aggregated": True,
-                    "message": "No data available for the specified filters",
-                    "overall_metrics": {}
-                }
+                return {"aggregated": True, "message": "No data available for the specified filters", "overall_metrics": {}}
 
-            # Aggregate metrics across all groups
-            aggregated_metrics = {}
-            metric_counts = {}
-
+            aggregated_metrics: Dict[str, float] = {}
+            metric_counts: Dict[str, int] = {}
             for item in items:
                 if not isinstance(item, dict):
                     continue
-
-                # Use the extracted metrics if available
                 metrics_data = item.get('metrics_extracted', item.get('metrics', {}))
-
                 for metric_key, metric_info in metrics_data.items():
-                    if metric_key not in aggregated_metrics:
-                        aggregated_metrics[metric_key] = 0
-                        metric_counts[metric_key] = 0
+                    self._accumulate_metric_value(metric_key, metric_info, aggregated_metrics, metric_counts)
 
-                    # Extract value from different possible formats
-                    if isinstance(metric_info, dict):
-                        value = metric_info.get('value', 0)
-                    elif isinstance(metric_info, (int, float)):
-                        value = metric_info
-                    else:
-                        continue
+            overall_metrics = self._compute_overall_metrics(aggregated_metrics, metric_counts)
 
-                    aggregated_metrics[metric_key] += value
-                    metric_counts[metric_key] += 1
-
-            # Calculate averages for MEAN aggregations
-            overall_metrics = {}
-            for metric_key, total in aggregated_metrics.items():
-                count = metric_counts.get(metric_key, 1)
-                if count > 0:
-                    # For latency.mean, we want the average of all endpoint means
-                    if 'latency' in metric_key.lower() and 'mean' in metric_key.lower():
-                        overall_metrics[metric_key] = {
-                            "value": total / count,
-                            "unit": "ms",
-                            "aggregation": "MEAN",
-                            "note": f"Average across {count} endpoints"
-                        }
-                    else:
-                        overall_metrics[metric_key] = {
-                            "value": total / count,
-                            "aggregation": "MEAN",
-                            "note": f"Average across {count} groups"
-                        }
-
-            # Create a simplified response
-            aggregated_result = {
+            aggregated_result: Dict[str, Any] = {
                 "aggregated": True,
                 "message": "Results aggregated across all groups",
                 "total_groups_analyzed": len(items),
                 "overall_metrics": overall_metrics,
-                "original_group_count": len(items)
+                "original_group_count": len(items),
             }
-
-            # Add human-readable summary
             if 'latency.mean' in overall_metrics:
                 latency_value = overall_metrics['latency.mean']['value']
                 aggregated_result['summary'] = f"Overall mean latency: {latency_value:.2f}ms across {len(items)} endpoints"
@@ -449,7 +493,6 @@ class ApplicationCallGroupMCPTools(BaseInstanaClient):
 
         except Exception as e:
             logger.error(f"Error aggregating grouped results: {e}", exc_info=True)
-            # Return original if aggregation fails
             return result_dict
 
     def _check_elicitation_for_call_group_metrics(

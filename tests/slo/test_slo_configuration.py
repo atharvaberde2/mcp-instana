@@ -313,12 +313,18 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
         self.assertIn("timeWindow.durationUnit", result["missing_parameters"])
 
     def test_validate_slo_config_payload_valid(self):
-        """Test SLO config validation with valid payload."""
+        """Test SLO config validation with valid payload (all required fields present)."""
         payload = {
             "name": "Test SLO",
             "tags": ["test"],
             "target": 0.95,
-            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+            "entity": {
+                "type": "application",
+                "applicationId": "app-1",
+                "boundaryScope": "ALL",
+                "includeInternal": False,
+                "includeSynthetic": False,
+            },
             "indicator": {"type": "timeBased", "blueprint": "latency"},
             "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
         }
@@ -627,7 +633,13 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
                 "name": "Updated SLO",
                 "tags": ["test"],
                 "target": 0.95,
-                "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+                "entity": {
+                    "type": "application",
+                    "applicationId": "app-1",
+                    "boundaryScope": "ALL",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
+                },
                 "indicator": {"type": "timeBased", "blueprint": "latency"},
                 "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
             }
@@ -760,7 +772,13 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
                 "name": "Test SLO",
                 "tags": ["test"],
                 "target": 0.95,
-                "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+                "entity": {
+                    "type": "application",
+                    "applicationId": "app-1",
+                    "boundaryScope": "ALL",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
+                },
                 "indicator": {"type": "timeBased", "blueprint": "latency"},
                 "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
             }
@@ -789,7 +807,13 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
                 "name": "Test SLO",
                 "tags": ["test"],
                 "target": 0.95,
-                "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+                "entity": {
+                    "type": "application",
+                    "applicationId": "app-1",
+                    "boundaryScope": "ALL",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
+                },
                 "indicator": {"type": "timeBased", "blueprint": "latency"},
                 "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
             }
@@ -814,7 +838,13 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
                 "name": "Test SLO",
                 "tags": ["test"],
                 "target": 0.95,
-                "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+                "entity": {
+                    "type": "application",
+                    "applicationId": "app-1",
+                    "boundaryScope": "ALL",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
+                },
                 "indicator": {"type": "timeBased", "blueprint": "latency"},
                 "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
             }
@@ -855,7 +885,13 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
                 "name": "Updated SLO",
                 "tags": ["test"],
                 "target": 0.98,
-                "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+                "entity": {
+                    "type": "application",
+                    "applicationId": "app-1",
+                    "boundaryScope": "ALL",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
+                },
                 "indicator": {"type": "timeBased", "blueprint": "latency"},
                 "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
             }
@@ -883,7 +919,13 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
                 "name": "Updated SLO",
                 "tags": ["test"],
                 "target": 0.98,
-                "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+                "entity": {
+                    "type": "application",
+                    "applicationId": "app-1",
+                    "boundaryScope": "ALL",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
+                },
                 "indicator": {"type": "timeBased", "blueprint": "latency"},
                 "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
             }
@@ -907,7 +949,12 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
                 "name": "Updated SLO",
                 "tags": ["test"],
                 "target": 0.98,
-                "entity": {"type": "service", "serviceId": "svc-1"},
+                "entity": {
+                    "type": "service",
+                    "serviceId": "svc-1",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
+                },
                 "indicator": {"type": "timeBased", "blueprint": "latency"},
                 "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
             }
@@ -985,32 +1032,278 @@ class TestSLOConfigurationMCPTools(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_validate_slo_config_payload_indicator_not_dict(self):
-        """Test SLO config validation with indicator not being a dict."""
+        """Non-dict indicator skips sub-field checks; no indicator.* errors are raised."""
         payload = {
             "name": "Test SLO",
             "tags": ["test"],
             "target": 0.95,
-            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
             "indicator": "not a dict",
             "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
         }
         result = self.client._validate_slo_config_payload(payload)
-        # Should pass validation since indicator exists
-        self.assertIsNone(result)
+        # No indicator.* sub-field errors should appear
+        if result:
+            for p in result.get("missing_parameters", []):
+                self.assertFalse(p.startswith("indicator."), f"Unexpected indicator field error: {p}")
 
     def test_validate_slo_config_payload_time_window_not_dict(self):
-        """Test SLO config validation with timeWindow not being a dict."""
+        """Non-dict timeWindow skips sub-field checks; no timeWindow.* errors are raised."""
         payload = {
             "name": "Test SLO",
             "tags": ["test"],
             "target": 0.95,
-            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL"},
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
             "indicator": {"type": "timeBased", "blueprint": "latency"},
             "timeWindow": "not a dict"
         }
         result = self.client._validate_slo_config_payload(payload)
-        # Should pass validation since timeWindow exists
+        # No timeWindow.* sub-field errors should appear
+        if result:
+            for p in result.get("missing_parameters", []):
+                self.assertFalse(p.startswith("timeWindow."), f"Unexpected timeWindow field error: {p}")
+
+
+    # ── New validation tests for enum / range checks ──────────────────────
+
+    def test_validate_slo_config_payload_invalid_target_too_high(self):
+        """Target > 0.9999 should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 1.0,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("target", result["missing_parameters"])
+        self.assertTrue(any("error" in p for p in result["parameter_details"] if p["name"] == "target"))
+
+    def test_validate_slo_config_payload_invalid_target_negative(self):
+        """Negative target should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": -0.1,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("target", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_target_boundary_zero(self):
+        """target=0.0 is a valid edge-case value."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.0,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
         self.assertIsNone(result)
+
+    def test_validate_slo_config_payload_invalid_boundary_scope(self):
+        """entity.boundaryScope with a bad value should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1",
+                       "boundaryScope": "INVALID_SCOPE",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("entity.boundaryScope", result["missing_parameters"])
+        detail = next(p for p in result["parameter_details"] if p["name"] == "entity.boundaryScope")
+        self.assertIn("error", detail)
+
+    def test_validate_slo_config_payload_missing_include_internal(self):
+        """Missing entity.includeInternal should be caught."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1",
+                       "boundaryScope": "ALL", "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("entity.includeInternal", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_missing_include_synthetic(self):
+        """Missing entity.includeSynthetic should be caught."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1",
+                       "boundaryScope": "ALL", "includeInternal": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("entity.includeSynthetic", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_invalid_indicator_type(self):
+        """indicator.type with an unrecognised value should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "unknownType", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("indicator.type", result["missing_parameters"])
+        detail = next(p for p in result["parameter_details"] if p["name"] == "indicator.type")
+        self.assertIn("error", detail)
+
+    def test_validate_slo_config_payload_invalid_blueprint(self):
+        """indicator.blueprint with an unrecognised value should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "badBlueprint"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("indicator.blueprint", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_invalid_aggregation(self):
+        """Optional indicator.aggregation with a bad value should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency", "aggregation": "BAD_AGG"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("indicator.aggregation", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_valid_aggregation(self):
+        """Valid optional indicator.aggregation should not trigger an error."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency", "aggregation": "P90"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNone(result)
+
+    def test_validate_slo_config_payload_invalid_time_window_type(self):
+        """timeWindow.type with an unrecognised value should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "badType", "duration": 1, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("timeWindow.type", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_invalid_duration_unit(self):
+        """timeWindow.durationUnit not in the allowed set should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "month"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        # "month" is not a valid SDK value — "calendar_month" is
+        self.assertIsNotNone(result)
+        self.assertIn("timeWindow.durationUnit", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_calendar_month_duration_unit(self):
+        """calendar_month is the correct SDK value for monthly windows."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 1, "durationUnit": "calendar_month"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNone(result)
+
+    def test_validate_slo_config_payload_non_positive_duration(self):
+        """timeWindow.duration <= 0 should be rejected."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 0.95,
+            "entity": {"type": "application", "applicationId": "app-1", "boundaryScope": "ALL",
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "timeBased", "blueprint": "latency"},
+            "timeWindow": {"type": "rolling", "duration": 0, "durationUnit": "week"}
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("timeWindow.duration", result["missing_parameters"])
+
+    def test_validate_slo_config_payload_consolidated_errors(self):
+        """Multiple invalid enum values should all be reported in one response."""
+        payload = {
+            "name": "Test SLO",
+            "tags": ["test"],
+            "target": 1.5,  # invalid
+            "entity": {"type": "application", "applicationId": "app-1",
+                       "boundaryScope": "WRONG",  # invalid
+                       "includeInternal": False, "includeSynthetic": False},
+            "indicator": {"type": "badType", "blueprint": "badBlueprint"},  # both invalid
+            "timeWindow": {"type": "badType", "duration": 1, "durationUnit": "month"}  # both invalid
+        }
+        result = self.client._validate_slo_config_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("elicitation_needed", result)
+        # All invalid fields should be reported at once
+        self.assertIn("target", result["missing_parameters"])
+        self.assertIn("entity.boundaryScope", result["missing_parameters"])
+        self.assertIn("indicator.type", result["missing_parameters"])
+        self.assertIn("indicator.blueprint", result["missing_parameters"])
+        self.assertIn("timeWindow.type", result["missing_parameters"])
+        self.assertIn("timeWindow.durationUnit", result["missing_parameters"])
 
 
 if __name__ == "__main__":

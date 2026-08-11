@@ -4,6 +4,8 @@ Automation Action Catalog MCP Tools Module
 This module provides automation action catalog tools for Instana Automation.
 """
 
+import ast
+import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
@@ -30,6 +32,87 @@ class ActionCatalogMCPTools(BaseInstanaClient):
         """Initialize the Application Alert MCP tools client."""
         super().__init__(read_token=read_token, base_url=base_url)
 
+    @staticmethod
+    def _parse_action_matches_payload(
+        payload: Union[Dict[str, Any], str],
+    ) -> Union[Dict[str, Any], tuple]:
+        """
+        Parse and validate the raw payload for get_action_matches.
+
+        Returns the parsed dict on success, or a (elicitation_dict,) 1-tuple on failure
+        so callers can distinguish a parse error from a valid empty dict.
+        """
+        if not payload:
+            return ({"elicitation_needed": True,
+                     "reason": "get_action_matches: payload is required",
+                     "api_error": ["payload: required — provide a dict with at least 'name'"],
+                     "message": ("payload is required. Provide a dict with at least 'name', e.g.:\n"
+                                 '  {"name": "CPU usage high", "description": "..."}')},)
+
+        if not isinstance(payload, str):
+            return payload
+
+        # Try JSON, then quote-fixed JSON, then ast.literal_eval
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            pass
+        try:
+            return json.loads(payload.replace("'", '"'))
+        except json.JSONDecodeError:
+            pass
+        try:
+            return ast.literal_eval(payload)
+        except (SyntaxError, ValueError) as e:
+            return ({"elicitation_needed": True,
+                     "reason": "get_action_matches: payload is not valid JSON or Python literal",
+                     "api_error": [f"payload: could not be parsed — {e}"],
+                     "message": f"payload could not be parsed: {e}"},)
+
+    @staticmethod
+    def _build_action_search_space(request_body: Dict[str, Any]):
+        """
+        Import ActionSearchSpace and instantiate it from request_body.
+
+        Returns the object on success or an error dict on failure.
+        """
+        try:
+            from instana_client.models.action_search_space import ActionSearchSpace
+            logger.debug("Successfully imported ActionSearchSpace")
+        except ImportError as e:
+            logger.debug(f"Error importing ActionSearchSpace: {e}")
+            return {"error": f"Failed to import ActionSearchSpace: {e!s}"}
+        try:
+            logger.debug(f"Creating ActionSearchSpace with params: {request_body}")
+            obj = ActionSearchSpace(**request_body)
+            logger.debug("Successfully created config object")
+            return obj
+        except Exception as e:
+            logger.debug(f"Error creating ActionSearchSpace: {e}")
+            return {"error": f"Failed to create config object: {e!s}"}
+
+    def _clean_action_matches_response(self, result_dict: Any) -> Dict[str, Any]:
+        """Format and clean a parsed action-matches API response."""
+        if not isinstance(result_dict, list):
+            logger.debug(f"Result from get_action_matches: {result_dict}")
+            return {"success": True, "message": "Action match retrieved successfully", "data": result_dict}
+
+        cleaned_matches = []
+        for match in result_dict:
+            if isinstance(match, dict) and 'action' in match:
+                cleaned_matches.append({
+                    "score": match.get("score"),
+                    "aiEngine": match.get("aiEngine"),
+                    "confidence": match.get("confidence"),
+                    "action": self._clean_action_data(match["action"]),
+                })
+            else:
+                cleaned_matches.append(match)
+
+        logger.debug(f"Cleaned {len(cleaned_matches)} action matches (removed ~40-50% of data)")
+        return {"success": True, "message": "Action matches retrieved successfully",
+                "data": cleaned_matches, "count": len(cleaned_matches)}
+
     @with_header_auth(ActionCatalogApi)
     async def get_action_matches(self,
                             payload: Union[Dict[str, Any], str],
@@ -51,122 +134,44 @@ class ActionCatalogMCPTools(BaseInstanaClient):
             Dict[str, Any]: The action matches for the given payload and target snapshot ID.
         """
         try:
+            parsed = self._parse_action_matches_payload(payload)
+            if isinstance(parsed, tuple):
+                return parsed[0]
+            request_body = parsed
 
-            if not payload:
-                return {"error": "payload is required"}
+            name = request_body.get("name") if isinstance(request_body, dict) else None
+            if not name or not str(name).strip():
+                return {
+                    "elicitation_needed": True,
+                    "reason": "get_action_matches has 1 validation problem(s)",
+                    "api_error": ["payload.name: required — non-empty string describing the action to search for. "
+                                  'Example: "CPU usage high"'],
+                    "message": ("The get_action_matches call has 1 problem(s). "
+                                "Correct all issues below and retry:\n"
+                                '  - payload.name: required — non-empty string describing the action to search for. '
+                                'Example: "CPU usage high"'),
+                }
 
-            # Parse the payload if it's a string
-            if isinstance(payload, str):
-                logger.debug("Payload is a string, attempting to parse")
-                try:
-                    import json
-                    try:
-                        parsed_payload = json.loads(payload)
-                        logger.debug("Successfully parsed payload as JSON")
-                        request_body = parsed_payload
-                    except json.JSONDecodeError as e:
-                        logger.debug(f"JSON parsing failed: {e}, trying with quotes replaced")
+            config_object = self._build_action_search_space(request_body)
+            if isinstance(config_object, dict):
+                return config_object
 
-                        # Try replacing single quotes with double quotes
-                        fixed_payload = payload.replace("'", "\"")
-                        try:
-                            parsed_payload = json.loads(fixed_payload)
-                            logger.debug("Successfully parsed fixed JSON")
-                            request_body = parsed_payload
-                        except json.JSONDecodeError:
-                            # Try as Python literal
-                            import ast
-                            try:
-                                parsed_payload = ast.literal_eval(payload)
-                                logger.debug("Successfully parsed payload as Python literal")
-                                request_body = parsed_payload
-                            except (SyntaxError, ValueError) as e2:
-                                logger.debug(f"Failed to parse payload string: {e2}")
-                                return {"error": f"Invalid payload format: {e2}", "payload": payload}
-                except Exception as e:
-                    logger.debug(f"Error parsing payload string: {e}")
-                    return {"error": f"Failed to parse payload: {e}", "payload": payload}
-            else:
-                # If payload is already a dictionary, use it directly
-                logger.debug("Using provided payload dictionary")
-                request_body = payload
-
-            # Validate required fields in the payload
-            required_fields = ["name"]
-            for field in required_fields:
-                if field not in request_body:
-                    logger.warning(f"Missing required field: {field}")
-                    return {"error": f"Missing required field: {field}"}
-
-            # Import the ActionSearchSpace class
-            try:
-                from instana_client.models.action_search_space import (
-                    ActionSearchSpace,
-                )
-                logger.debug("Successfully imported ActionSearchSpace")
-            except ImportError as e:
-                logger.debug(f"Error importing ActionSearchSpace: {e}")
-                return {"error": f"Failed to import ActionSearchSpace: {e!s}"}
-
-            # Create an ActionSearchSpace object from the request body
-            try:
-                logger.debug(f"Creating ActionSearchSpace with params: {request_body}")
-                config_object = ActionSearchSpace(**request_body)
-                logger.debug("Successfully created config object")
-            except Exception as e:
-                logger.debug(f"Error creating ActionSearchSpace: {e}")
-                return {"error": f"Failed to create config object: {e!s}"}
-
-            # Call the get_action_matches_without_preload_content method from the SDK to avoid Pydantic validation issues
             logger.debug("Calling get_action_matches_without_preload_content with config object")
             result = api_client.get_action_matches_without_preload_content(
                 action_search_space=config_object,
                 target_snapshot_id=target_snapshot_id,
             )
 
-            # Parse the JSON response manually
-            import json
             try:
-                # The result from get_action_matches_without_preload_content is a response object
-                # We need to read the response data and parse it as JSON
                 response_text = result.data.decode('utf-8')
                 result_dict = json.loads(response_text)
                 logger.debug("Successfully retrieved action matches data")
-
-                # Handle the parsed JSON data and clean action data
-                if isinstance(result_dict, list):
-                    # Clean each action match (which has 'action' field containing the action data)
-                    cleaned_matches = []
-                    for match in result_dict:
-                        if isinstance(match, dict) and 'action' in match:
-                            cleaned_match = {
-                                "score": match.get("score"),
-                                "aiEngine": match.get("aiEngine"),
-                                "confidence": match.get("confidence"),
-                                "action": self._clean_action_data(match["action"])
-                            }
-                            cleaned_matches.append(cleaned_match)
-                        else:
-                            cleaned_matches.append(match)
-
-                    logger.debug(f"Cleaned {len(cleaned_matches)} action matches (removed ~40-50% of data)")
-                    return {
-                        "success": True,
-                        "message": "Action matches retrieved successfully",
-                        "data": cleaned_matches,
-                        "count": len(cleaned_matches)
-                    }
-                else:
-                    logger.debug(f"Result from get_action_matches: {result_dict}")
-                    return {
-                        "success": True,
-                        "message": "Action match retrieved successfully",
-                        "data": result_dict
-                    }
+                return self._clean_action_matches_response(result_dict)
             except (json.JSONDecodeError, AttributeError) as json_err:
                 error_message = f"Failed to parse JSON response: {json_err}"
                 logger.error(error_message)
                 return {"error": error_message}
+
         except Exception as e:
             logger.error(f"Error in get_action_matches: {e}")
             return {"error": f"Failed to get action matches: {e!s}"}
@@ -247,7 +252,6 @@ class ActionCatalogMCPTools(BaseInstanaClient):
             result = api_client.get_actions_without_preload_content()
 
             # Parse the JSON response manually
-            import json
             try:
                 # The result from get_actions_without_preload_content is a response object
                 # We need to read the response data and parse it as JSON
@@ -300,8 +304,17 @@ class ActionCatalogMCPTools(BaseInstanaClient):
             Dict[str, Any]: The cleaned detailed information about the automation action
         """
         try:
-            if not action_id:
-                return {"error": "action_id is required"}
+            # --- Pre-flight ---
+            if not action_id or not str(action_id).strip():
+                return {
+                    "elicitation_needed": True,
+                    "reason": "get_action_details: action_id is required",
+                    "api_error": ["action_id: required — provide the action UUID (obtain from get_actions)"],
+                    "message": (
+                        "action_id is required. Obtain it from the get_actions operation first."
+                    ),
+                }
+            # --- End pre-flight ---
 
             logger.debug(f"get_action_details called with action_id: {action_id}")
 
@@ -309,7 +322,6 @@ class ActionCatalogMCPTools(BaseInstanaClient):
             result = api_client.get_action_by_id_without_preload_content(id=action_id)
 
             # Parse the JSON response manually
-            import json
             try:
                 # The result from get_action_by_id_without_preload_content is a response object
                 # We need to read the response data and parse it as JSON
@@ -351,7 +363,6 @@ class ActionCatalogMCPTools(BaseInstanaClient):
             result = api_client.get_actions_without_preload_content()
 
             # Parse the JSON response manually
-            import json
             try:
                 # The result from get_actions_without_preload_content is a response object
                 # We need to read the response data and parse it as JSON
@@ -405,7 +416,6 @@ class ActionCatalogMCPTools(BaseInstanaClient):
             result = api_client.get_actions_without_preload_content()
 
             # Parse the JSON response manually
-            import json
             try:
                 # The result from get_actions_without_preload_content is a response object
                 # We need to read the response data and parse it as JSON
@@ -446,6 +456,105 @@ class ActionCatalogMCPTools(BaseInstanaClient):
             logger.error(f"Error in get_action_tags: {e}")
             return {"error": f"Failed to get action tags: {e!s}"}
 
+    @staticmethod
+    def _preflight_action_matches_by_id(
+        application_id: Optional[str],
+        snapshot_id: Optional[str],
+        to: Optional[int],
+        window_size: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        """Validate parameters for get_action_matches_by_id_and_time_window; return elicitation dict or None."""
+        errors: list = []
+
+        if not application_id and not snapshot_id:
+            errors.append(
+                "Either 'application_id' or 'snapshot_id' must be provided. "
+                "Example: application_id='app-123'"
+            )
+
+        if to is not None:
+            if not isinstance(to, int):
+                errors.append(
+                    f"to: must be an integer Unix timestamp in milliseconds (13 digits), "
+                    f"got {type(to).__name__!r}"
+                )
+            elif to < 1_000_000_000_000 or to > 9_999_999_999_999:
+                errors.append(
+                    f"to: {to} is not a valid 13-digit millisecond timestamp. "
+                    "Example: 1710658800000"
+                )
+
+        if window_size is not None:
+            if not isinstance(window_size, int):
+                errors.append(
+                    f"window_size: must be a positive integer (milliseconds), "
+                    f"got {type(window_size).__name__!r}"
+                )
+            elif window_size < 0:
+                errors.append(
+                    f"window_size: {window_size} must be ≥ 0. "
+                    "Example: 3600000 (1 hour)"
+                )
+
+        if not errors:
+            return None
+        return {
+            "elicitation_needed": True,
+            "reason": f"get_action_matches_by_id_and_time_window has {len(errors)} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The get_action_matches_by_id_and_time_window call has {len(errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    def _build_action_matches_by_id_response(
+        self,
+        result_dict: Any,
+        application_id: Optional[str],
+        snapshot_id: Optional[str],
+        to: Optional[int],
+        window_size: Optional[int],
+    ) -> Dict[str, Any]:
+        """Format and clean a parsed get_action_matches_by_id_and_time_window response."""
+        filters = {
+            "application_id": application_id,
+            "snapshot_id": snapshot_id,
+            "to": to,
+            "window_size": window_size,
+        }
+
+        if isinstance(result_dict, dict) and 'errors' in result_dict:
+            error_message = f"API returned error: {result_dict['errors']}"
+            logger.error(f"[get_action_matches_by_id_and_time_window] {error_message}")
+            return {"error": error_message, "details": result_dict, "filters": filters}
+
+        if not isinstance(result_dict, list):
+            logger.debug(f"[get_action_matches_by_id_and_time_window] Result: {result_dict}")
+            return {"success": True, "message": "Action matches retrieved successfully", "data": result_dict}
+
+        cleaned_matches = []
+        for match in result_dict:
+            if isinstance(match, dict) and 'action' in match:
+                cleaned_matches.append({
+                    "score": match.get("score"),
+                    "aiEngine": match.get("aiEngine"),
+                    "confidence": match.get("confidence"),
+                    "action": self._clean_action_data(match["action"]),
+                })
+            else:
+                cleaned_matches.append(match)
+
+        logger.debug(f"get_action_matches_by_id_and_time_window Cleaned {len(cleaned_matches)} action matches (removed ~40-50% of data)")
+        return {
+            "success": True,
+            "message": "Action matches retrieved successfully",
+            "data": cleaned_matches,
+            "count": len(cleaned_matches),
+            "filters": filters,
+        }
+
     @with_header_auth(ActionCatalogApi)
     async def get_action_matches_by_id_and_time_window(self,
                                                        application_id: Optional[str] = None,
@@ -478,96 +587,25 @@ class ActionCatalogMCPTools(BaseInstanaClient):
         try:
             logger.debug(f"[get_action_matches_by_id_and_time_window] Called with application_id={application_id}, snapshot_id={snapshot_id}, to={to}, window_size={window_size}")
 
-            # Validate that at least one ID is provided
-            if not application_id and not snapshot_id:
-                logger.warning("[get_action_matches_by_id_and_time_window] Neither application_id nor snapshot_id provided")
-                return {
-                    "error": "Either application_id or snapshot_id must be provided",
-                    "example": {
-                        "application_id": "app-123",
-                        "window_size": 3600000
-                    }
-                }
+            preflight = self._preflight_action_matches_by_id(application_id, snapshot_id, to, window_size)
+            if preflight:
+                return preflight
 
-            # Validate timestamp format (must be 13-digit milliseconds)
-            if to is not None and (to < 1000000000000 or to > 9999999999999):
-                logger.warning(f"[get_action_matches_by_id_and_time_window] Invalid timestamp: {to}")
-                return {"error": "Invalid timestamp format. Expected 13-digit milliseconds (e.g. 1234567890000)"}
-
-            # Validate window_size is positive
-            if window_size is not None and window_size < 0:
-                logger.warning(f"[get_action_matches_by_id_and_time_window] Invalid window_size: {window_size}")
-                return {"error": "window_size must be positive"}
-
-            # Call the get_action_matches_by_id_and_time_window_without_preload_content method from the SDK
             logger.debug("[get_action_matches_by_id_and_time_window] Calling SDK method")
             result = api_client.get_action_matches_by_id_and_time_window_without_preload_content(
                 application_id=application_id,
                 snapshot_id=snapshot_id,
                 to=to,
-                window_size=window_size
+                window_size=window_size,
             )
 
-            # Parse the JSON response manually
-            import json
             try:
-                # The result from get_action_matches_by_id_and_time_window_without_preload_content is a response object
-                # We need to read the response data and parse it as JSON
                 response_text = result.data.decode('utf-8')
                 result_dict = json.loads(response_text)
                 logger.debug("[get_action_matches_by_id_and_time_window] Successfully parsed response")
-
-                # Check if the response contains an error
-                if isinstance(result_dict, dict) and 'errors' in result_dict:
-                    error_message = f"API returned error: {result_dict['errors']}"
-                    logger.error(f"[get_action_matches_by_id_and_time_window] {error_message}")
-                    return {
-                        "error": error_message,
-                        "details": result_dict,
-                        "filters": {
-                            "application_id": application_id,
-                            "snapshot_id": snapshot_id,
-                            "to": to,
-                            "window_size": window_size
-                        }
-                    }
-
-                # Handle the parsed JSON data and clean action data
-                if isinstance(result_dict, list):
-                    # Clean each action match (which has 'action' field containing the action data)
-                    cleaned_matches = []
-                    for match in result_dict:
-                        if isinstance(match, dict) and 'action' in match:
-                            cleaned_match = {
-                                "score": match.get("score"),
-                                "aiEngine": match.get("aiEngine"),
-                                "confidence": match.get("confidence"),
-                                "action": self._clean_action_data(match["action"])
-                            }
-                            cleaned_matches.append(cleaned_match)
-                        else:
-                            cleaned_matches.append(match)
-
-                    logger.debug(f"get_action_matches_by_id_and_time_window Cleaned {len(cleaned_matches)} action matches (removed ~40-50% of data)")
-                    return {
-                        "success": True,
-                        "message": "Action matches retrieved successfully",
-                        "data": cleaned_matches,
-                        "count": len(cleaned_matches),
-                        "filters": {
-                            "application_id": application_id,
-                            "snapshot_id": snapshot_id,
-                            "to": to,
-                            "window_size": window_size
-                        }
-                    }
-                else:
-                    logger.debug(f"[get_action_matches_by_id_and_time_window] Result: {result_dict}")
-                    return {
-                        "success": True,
-                        "message": "Action matches retrieved successfully",
-                        "data": result_dict
-                    }
+                return self._build_action_matches_by_id_response(
+                    result_dict, application_id, snapshot_id, to, window_size
+                )
             except (json.JSONDecodeError, AttributeError) as json_err:
                 error_message = f"Failed to parse JSON response: {json_err}"
                 logger.error(f"[get_action_matches_by_id_and_time_window] {error_message}")

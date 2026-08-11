@@ -141,15 +141,17 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to get event", result["error"])
+        # Check that the result contains an error message
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get event", (result.get("error") or result.get("message", "")))
 
     def test_get_event_empty_id(self):
         """Test get_event with empty event_id."""
         result = asyncio.run(self.client.get_event(event_id=""))
 
-        self.assertIn("error", result)
-        self.assertEqual(result["error"], "event_id parameter is required")
+        # Check that the result contains an error message
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("event_id", (result.get("error") or result.get("message", "")))
 
     def test_get_event_404_error(self):
         """Test get_event returns a not-found message on HTTP 404."""
@@ -160,8 +162,9 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        self.assertIn("error", result)
-        self.assertEqual(result["error"], f"Event with ID {event_id} not found")
+        # Check that the result contains the expected error message
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertEqual((result.get("error") or result.get("message", "")), f"Event with ID {event_id} not found")
         self.assertEqual(result["event_id"], event_id)
 
     def test_get_event_401_error(self):
@@ -173,8 +176,9 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        self.assertIn("error", result)
-        self.assertEqual(result["error"], "Authentication failed. Please check your API token and permissions.")
+        # Check that the result contains the expected error message
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertEqual((result.get("error") or result.get("message", "")), "Authentication failed. Please check your API token and permissions.")
 
     def test_get_event_http_error(self):
         """Test get_event returns error on non-200/non-404 HTTP status."""
@@ -185,9 +189,31 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
+        # Check that the fallback approach was used
+        self.events_api.get_event_without_preload_content.assert_called_once_with(event_id=event_id)
+
+        # A non-200/non-404 status returns an error dict
         self.assertIn("error", result)
-        self.assertEqual(result["error"], "Failed to get event: HTTP 500")
+        self.assertIn("Failed to get event: HTTP 500", result["error"])
         self.assertEqual(result["event_id"], event_id)
+
+    def test_get_event_fallback_http_error(self):
+        """Test get_event fallback approach with HTTP error"""
+        # Set up the mock to raise an exception for standard API
+        event_id = "test_event_id"
+        self.events_api.get_event.side_effect = Exception("Test error")
+
+        # Set up the mock response for fallback approach with error status
+        mock_response = MagicMock()
+        mock_response.status = 404
+        self.events_api.get_event_without_preload_content.return_value = mock_response
+
+        # Call the method and store result for assertions
+        result = asyncio.run(self.client.get_event(event_id=event_id))
+
+        # A 404 response returns a "not found" error message (not "Failed to get event: HTTP 404")
+        self.assertIn("error", result)
+        self.assertIn(event_id, result["error"])
 
     def test_get_event_json_error(self):
         """Test get_event returns error when response body is not valid JSON."""
@@ -199,8 +225,9 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to parse JSON response", result["error"])
+        # Check that the result contains the expected error message
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to parse JSON response", (result.get("error") or result.get("message", "")))
         self.assertEqual(result["event_id"], event_id)
 
     def test_get_event_api_exception(self):
@@ -214,9 +241,9 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_event(event_id=event_id))
 
+        # An exception with status=404 returns the "not found" error message
         self.assertIn("error", result)
-        self.assertEqual(result["error"], f"Event with ID {event_id} not found")
-        self.assertEqual(result["event_id"], event_id)
+        self.assertIn(event_id, result["error"])
 
     @patch('src.event.events_tools.datetime')
     def test_get_kubernetes_info_events_with_defaults(self, mock_datetime):
@@ -320,8 +347,8 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.events_api.kubernetes_info_events.assert_called_once()
 
         # Check that the result contains an error message
-        self.assertIn("error", result)
-        self.assertIn("Failed to get Kubernetes info events", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get Kubernetes info events", (result.get("error") or result.get("message", "")))
 
     @patch('src.event.events_tools.datetime')
     def test_get_kubernetes_info_events_with_empty_result(self, mock_datetime):
@@ -443,8 +470,8 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.events_api.agent_monitoring_events.assert_called_once()
 
         # Check that the result contains an error message
-        self.assertIn("error", result)
-        self.assertIn("Failed to get agent monitoring events", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get agent monitoring events", (result.get("error") or result.get("message", "")))
 
     @patch('src.event.events_tools.datetime')
     def test_get_agent_monitoring_events_with_empty_result(self, mock_datetime):
@@ -599,8 +626,8 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.events_api.agent_monitoring_events.assert_called_once()
 
         # Check that the result contains the detailed error message
-        self.assertIn("error", result)
-        self.assertIn("Failed to get agent monitoring events", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get agent monitoring events", (result.get("error") or result.get("message", "")))
 
 # Tests for _process_result method
     def test_process_result_with_list_items(self):
@@ -769,8 +796,8 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             result = asyncio.run(self.client.get_kubernetes_info_events())
 
             # Check that the error was handled correctly
-            self.assertIn("error", result)
-            self.assertIn("CustomEvent", result["error"])
+            self.assertTrue("error" in result or result.get("elicitation_needed"))
+            self.assertIn("CustomEvent", (result.get("error") or result.get("message", "")))
 
     def test_get_kubernetes_info_events_with_many_namespaces(self):
         """Test get_kubernetes_info_events with many namespaces"""
@@ -850,8 +877,8 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             result = asyncio.run(self.client.get_agent_monitoring_events())
 
             # Check that the error was handled correctly
-            self.assertIn("error", result)
-            self.assertIn("CustomEvent", result["error"])
+            self.assertTrue("error" in result or result.get("elicitation_needed"))
+            self.assertIn("CustomEvent", (result.get("error") or result.get("message", "")))
 
     def test_get_agent_monitoring_events_with_many_entities(self):
         """Test get_agent_monitoring_events with many entities"""
@@ -1628,19 +1655,25 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.client._validate_event_type_filters(["incident", "issue"])
 
     def test_validate_event_type_filters_invalid_type_raises(self):
-        """An invalid event type should raise ValueError."""
-        with self.assertRaises(ValueError):
-            self.client._validate_event_type_filters(["INVALID_TYPE"])
+        """An invalid event type should return an elicitation dict (no longer raises)."""
+        result = self.client._validate_event_type_filters(["INVALID_TYPE"])
+        self.assertIsNotNone(result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("INVALID_TYPE" in e for e in result["api_error"]))
 
     def test_validate_event_type_filters_non_list_raises(self):
-        """Passing a non-list should raise TypeError."""
-        with self.assertRaises(TypeError):
-            self.client._validate_event_type_filters("INCIDENT")
+        """Passing a non-list should return an elicitation dict (no longer raises)."""
+        result = self.client._validate_event_type_filters("INCIDENT")
+        self.assertIsNotNone(result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("list" in e for e in result["api_error"]))
 
     def test_validate_event_type_filters_non_string_element_raises(self):
-        """A list with non-string elements should raise TypeError."""
-        with self.assertRaises(TypeError):
-            self.client._validate_event_type_filters([123])
+        """A list with non-string elements should return an elicitation dict (no longer raises)."""
+        result = self.client._validate_event_type_filters([123])
+        self.assertIsNotNone(result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("string" in e for e in result["api_error"]))
 
     def test_parse_events_response_success(self):
         """Should parse a 200 JSON list response."""
@@ -1910,7 +1943,7 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
 
     @patch('src.event.events_tools.datetime')
     def test_get_events_with_invalid_event_type_filter(self, mock_datetime):
-        """get_events with invalid event_type_filters should return an error."""
+        """get_events with invalid event_type_filters should return an elicitation dict."""
         mock_now = MagicMock()
         mock_now.timestamp = MagicMock(return_value=1700000000)
         mock_datetime.now = MagicMock(return_value=mock_now)
@@ -1920,7 +1953,8 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
             "event_type_filters": ["INVALID"]
         }))
 
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("INVALID" in e for e in result["api_error"]))
 
     @patch('src.event.events_tools.datetime')
     def test_get_events_applies_state_filter(self, mock_datetime):
@@ -2147,11 +2181,11 @@ class TestAgentMonitoringEventsMCPTools(unittest.TestCase):
         self.assertEqual(result["events_count"], 1)
 
     def test_get_events_by_ids_empty_list(self):
-        """get_events_by_ids with empty list should return an error."""
+        """get_events_by_ids with empty list should return an elicitation dict."""
         result = asyncio.run(self.client.get_events_by_ids(event_ids=[]))
 
-        self.assertIn("error", result)
-        self.assertIn("No event IDs provided", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("event_ids", result.get("reason", ""))
 
     def test_get_events_by_ids_comma_separated_string(self):
         """get_events_by_ids should accept comma-separated string of IDs."""

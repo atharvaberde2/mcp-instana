@@ -30,6 +30,8 @@ RELEASES_VALID_OPERATIONS = [
     OPERATION_UPDATE_RELEASE,
     OPERATION_DELETE_RELEASE
 ]
+RELEASE_ID_HINT = "Use get_all_releases to find available release IDs"
+RELEASE_START_EXPECTED_FORMAT = "Unix timestamp (ms) or datetime string (e.g., '19 March 2026, 2:47 PM|IST')"
 
 
 class ReleasesSmartRouterMCPTool(BaseInstanaClient):
@@ -129,8 +131,16 @@ Examples:
             if operation not in RELEASES_VALID_OPERATIONS:
                 logger.warning(f"[manage_releases] Invalid operation: {operation}")
                 return {
-                    "error": f"Invalid operation '{operation}'",
-                    "valid_operations": RELEASES_VALID_OPERATIONS
+                    "elicitation_needed": True,
+                    "reason": "invalid_operation",
+                    "api_error": [
+                        {
+                            "field": "operation",
+                            "issue": f"'{operation}' is not a valid releases operation",
+                            "expected": RELEASES_VALID_OPERATIONS
+                        }
+                    ],
+                    "message": f"Invalid operation '{operation}'. Valid operations: {RELEASES_VALID_OPERATIONS}"
                 }
 
             # Route to the appropriate operation
@@ -152,8 +162,16 @@ Examples:
 
                 if "error" in conversion_result:
                     return {
-                        "error": conversion_result["error"],
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": "invalid_time_params",
+                        "api_error": [
+                            {
+                                "field": "from_time/to_time",
+                                "issue": conversion_result["error"],
+                                "expected": "Unix timestamp (ms) or datetime string with timezone (e.g., '19 March 2026, 2:47 PM|IST')"
+                            }
+                        ],
+                        "message": conversion_result["error"]
                     }
 
                 # Update the converted values
@@ -174,8 +192,16 @@ Examples:
 
                 if not release_id:
                     return {
-                        "operation": operation,
-                        "error": "Missing required parameter: release_id"
+                        "elicitation_needed": True,
+                        "reason": "missing_required_params",
+                        "api_error": [
+                            {
+                                "field": "release_id",
+                                "issue": "release_id is required for get_release",
+                                "hint": RELEASE_ID_HINT
+                            }
+                        ],
+                        "message": "Missing required parameter 'release_id' for get_release."
                     }
 
                 result = await self.releases_client.get_release(
@@ -189,16 +215,17 @@ Examples:
                 applications = params.get("applications")
                 services = params.get("services")
 
+                errors = []
                 if not name:
-                    return {
-                        "operation": operation,
-                        "error": "Missing required parameter: name"
-                    }
-
+                    errors.append({"field": "name", "issue": "name is required for create_release", "example": "frontend/release-2000"})
                 if not start:
+                    errors.append({"field": "start", "issue": "start is required for create_release", "expected": RELEASE_START_EXPECTED_FORMAT})
+                if errors:
                     return {
-                        "operation": operation,
-                        "error": "Missing required parameter: start"
+                        "elicitation_needed": True,
+                        "reason": "missing_required_params",
+                        "api_error": errors,
+                        "message": f"Missing required parameters for create_release: {[e['field'] for e in errors]}"
                     }
 
                 # Convert datetime string to timestamp for start time
@@ -210,8 +237,16 @@ Examples:
 
                 if "error" in conversion_result:
                     return {
-                        "error": conversion_result["error"],
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": "invalid_time_params",
+                        "api_error": [
+                            {
+                                "field": "start",
+                                "issue": conversion_result["error"],
+                                "expected": RELEASE_START_EXPECTED_FORMAT
+                            }
+                        ],
+                        "message": conversion_result["error"]
                     }
 
                 # Update the converted value
@@ -232,22 +267,19 @@ Examples:
                 applications = params.get("applications")
                 services = params.get("services")
 
+                errors = []
                 if not release_id:
-                    return {
-                        "operation": operation,
-                        "error": "Missing required parameter: release_id"
-                    }
-
+                    errors.append({"field": "release_id", "issue": "release_id is required for update_release", "hint": RELEASE_ID_HINT})
                 if not name:
-                    return {
-                        "operation": operation,
-                        "error": "Missing required parameter: name"
-                    }
-
+                    errors.append({"field": "name", "issue": "name is required for update_release", "example": "frontend/release-2001"})
                 if not start:
+                    errors.append({"field": "start", "issue": "start is required for update_release", "expected": RELEASE_START_EXPECTED_FORMAT})
+                if errors:
                     return {
-                        "operation": operation,
-                        "error": "Missing required parameter: start"
+                        "elicitation_needed": True,
+                        "reason": "missing_required_params",
+                        "api_error": errors,
+                        "message": f"Missing required parameters for update_release: {[e['field'] for e in errors]}"
                     }
 
                 # Convert datetime string to timestamp for start time
@@ -259,8 +291,16 @@ Examples:
 
                 if "error" in conversion_result:
                     return {
-                        "error": conversion_result["error"],
-                        "operation": operation
+                        "elicitation_needed": True,
+                        "reason": "invalid_time_params",
+                        "api_error": [
+                            {
+                                "field": "start",
+                                "issue": conversion_result["error"],
+                                "expected": RELEASE_START_EXPECTED_FORMAT
+                            }
+                        ],
+                        "message": conversion_result["error"]
                     }
 
                 # Update the converted value
@@ -280,8 +320,16 @@ Examples:
 
                 if not release_id:
                     return {
-                        "operation": operation,
-                        "error": "Missing required parameter: release_id"
+                        "elicitation_needed": True,
+                        "reason": "missing_required_params",
+                        "api_error": [
+                            {
+                                "field": "release_id",
+                                "issue": "release_id is required for delete_release",
+                                "hint": RELEASE_ID_HINT
+                            }
+                        ],
+                        "message": "Missing required parameter 'release_id' for delete_release."
                     }
 
                 result = await self.releases_client.delete_release(
@@ -291,8 +339,16 @@ Examples:
 
             else:
                 return {
-                    "error": f"Unsupported operation: {operation}",
-                    "valid_operations": RELEASES_VALID_OPERATIONS
+                    "elicitation_needed": True,
+                    "reason": "invalid_operation",
+                    "api_error": [
+                        {
+                            "field": "operation",
+                            "issue": f"Unsupported operation: {operation}",
+                            "expected": RELEASES_VALID_OPERATIONS
+                        }
+                    ],
+                    "message": f"Unsupported operation '{operation}'. Valid operations: {RELEASES_VALID_OPERATIONS}"
                 }
 
             logger.debug(f"[manage_releases] Successfully completed operation: {operation}")

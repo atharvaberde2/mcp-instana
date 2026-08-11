@@ -4,6 +4,7 @@ SLO Correction Configuration MCP Tools Module
 This module provides SLO Correction Window configuration tools for Instana.
 """
 
+import ast
 import json
 import logging
 from datetime import datetime
@@ -25,6 +26,8 @@ from src.core.utils import BaseInstanaClient, with_header_auth
 
 logger = logging.getLogger(__name__)
 
+VALID_DURATION_UNITS = ("millisecond", "second", "minute", "hour", "day", "week", "calendar_month")
+
 class SLOCorrectionMCPTools(BaseInstanaClient):
     """Tools for SLO correction window configuration in Instana MCP."""
 
@@ -32,107 +35,135 @@ class SLOCorrectionMCPTools(BaseInstanaClient):
         """Initialize the SLO Correction MCP tools client."""
         super().__init__(read_token = read_token, base_url = base_url)
 
+    def _build_missing_param(self, name: str, description: str, field_type: str, **extra: Any) -> Dict[str, Any]:
+        param = {
+            "name": name,
+            "description": description,
+            "type": field_type,
+            "required": True,
+        }
+        param.update(extra)
+        return param
+
+    def _validate_correction_scheduling(self, payload: Dict[str, Any], missing_params: List[Dict[str, Any]]) -> None:
+        if "scheduling" not in payload:
+            missing_params.append(self._build_missing_param(
+                "scheduling",
+                "Scheduling configuration for the correction window",
+                "object",
+                example={
+                    "duration": 2,
+                    "durationUnit": "hour",
+                    "startTime": "2026-03-10 14:00:00|IST"
+                },
+                nested_fields={
+                    "duration": "Duration value (e.g., 2)",
+                    "durationUnit": f"One of: {', '.join(VALID_DURATION_UNITS)}",
+                    "startTime": "Start time with timezone (e.g., '2026-03-10 14:00:00|IST')"
+                }
+            ))
+            return
+
+        scheduling = payload["scheduling"]
+        if not isinstance(scheduling, dict):
+            return
+
+        if "duration" not in scheduling:
+            missing_params.append(self._build_missing_param(
+                "scheduling.duration",
+                "Duration value for the correction window",
+                "integer",
+                example=2,
+            ))
+        elif not isinstance(scheduling["duration"], int) or scheduling["duration"] <= 0:
+            missing_params.append(self._build_missing_param(
+                "scheduling.duration",
+                "Invalid duration value",
+                "integer",
+                example=2,
+                validation="Must be a positive integer",
+                error=f"Invalid duration: {scheduling['duration']}"
+            ))
+
+        if "durationUnit" not in scheduling:
+            missing_params.append(self._build_missing_param(
+                "scheduling.durationUnit",
+                "Unit for the duration",
+                "string",
+                example="hour",
+                validation=f"Must be one of: {', '.join(VALID_DURATION_UNITS)}"
+            ))
+        elif scheduling["durationUnit"] not in VALID_DURATION_UNITS:
+            missing_params.append(self._build_missing_param(
+                "scheduling.durationUnit",
+                "Invalid duration unit",
+                "string",
+                example="hour",
+                validation=f"Must be one of: {', '.join(VALID_DURATION_UNITS)}",
+                error=f"Invalid durationUnit: {scheduling['durationUnit']}"
+            ))
+
+    def _append_message_section(self, message_parts: List[str], title: str, params: List[Dict[str, Any]], include_validation: bool = False) -> None:
+        if not params:
+            return
+        message_parts.append(title)
+        for param in params:
+            example_str = f" (e.g., {param['example']})" if "example" in param else ""
+            validation_str = f" — {param['validation']}" if include_validation and "validation" in param else ""
+            error_str = f" [current error: {param['error']}]" if include_validation and "error" in param else ""
+            message_parts.append(f"- {param['name']}: {param['description']}{example_str}{validation_str}{error_str}")
+
+    def _build_correction_elicitation(self, missing_params: List[Dict[str, Any]]) -> Dict[str, Any]:
+        top_level = [p for p in missing_params if "." not in p["name"] and p["name"] != "scheduling"]
+        scheduling_fields = [p for p in missing_params if p["name"].startswith("scheduling")]
+        message_parts = ["To create an SLO correction window, I need the following information:\n"]
+        self._append_message_section(message_parts, "\n**Top-level fields:**", top_level)
+        self._append_message_section(message_parts, "\n**Scheduling fields:**", scheduling_fields, include_validation=True)
+        message_parts.append("\n**Note:** The startTime field should include timezone (e.g., '2026-03-10 14:00:00|IST') for accurate correction window scheduling.")
+        return {
+            "elicitation_needed": True,
+            "message": "\n".join(message_parts),
+            "missing_parameters": [p["name"] for p in missing_params],
+            "parameter_details": missing_params,
+            "user_prompt": "Please provide all the required fields to create the SLO correction window."
+        }
+
     def _validate_correction_payload(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Validate SLO correction configuration payload and return elicitation if fields are missing.
+        Validate SLO correction configuration payload and return elicitation if fields are missing
+        or invalid.
+
+        Validates all required fields and their allowed enum values before the API is called so
+        that a single consolidated response can be returned to the LLM for correction.
 
         Args:
             payload: The SLO correction configuration payload to validate
 
         Returns:
-            None if validation passes, elicitation dict if fields are missing
+            None if validation passes, elicitation dict if fields are missing or invalid
         """
         missing_params = []
 
-        # Check top-level required fields
         if "name" not in payload:
-            missing_params.append({
-                "name": "name",
-                "description": "Name of the correction window",
-                "type": "string",
-                "required": True,
-                "example": "Maintenance Window - Database Upgrade"
-            })
+            missing_params.append(self._build_missing_param(
+                "name",
+                "Name of the correction window",
+                "string",
+                example="Maintenance Window - Database Upgrade"
+            ))
 
         if "sloIds" not in payload:
-            missing_params.append({
-                "name": "sloIds",
-                "description": "List of SLO configuration IDs this correction applies to",
-                "type": "array of strings",
-                "required": True,
-                "example": ["slo-abc123", "slo-def456"]
-            })
+            missing_params.append(self._build_missing_param(
+                "sloIds",
+                "List of SLO configuration IDs this correction applies to",
+                "array of strings",
+                example=["slo-abc123", "slo-def456"]
+            ))
 
-        # Validate scheduling (most critical for corrections)
-        if "scheduling" not in payload:
-            missing_params.append({
-                "name": "scheduling",
-                "description": "Scheduling configuration for the correction window",
-                "type": "object",
-                "required": True,
-                "example": {
-                    "duration": 2,
-                    "durationUnit": "hour",
-                    "startTime": "2026-03-10 14:00:00|IST"
-                },
-                "nested_fields": {
-                    "duration": "Duration value (e.g., 2)",
-                    "durationUnit": "'minute', 'hour', 'day', 'week', or 'month'",
-                    "startTime": "Start time with timezone (e.g., '2026-03-10 14:00:00|IST')"
-                }
-            })
-        else:
-            scheduling = payload["scheduling"]
-            if isinstance(scheduling, dict):
-                if "duration" not in scheduling:
-                    missing_params.append({
-                        "name": "scheduling.duration",
-                        "description": "Duration value for the correction window",
-                        "type": "integer",
-                        "required": True,
-                        "example": 2
-                    })
-                if "durationUnit" not in scheduling:
-                    missing_params.append({
-                        "name": "scheduling.durationUnit",
-                        "description": "Unit for the duration",
-                        "type": "string",
-                        "required": True,
-                        "example": "hour",
-                        "validation": "Must be 'millisecond', 'second', 'minute', 'hour', 'day', 'week', or 'month'"
-                    })
-                # Note: startTime validation is handled in the router with timezone elicitation
+        self._validate_correction_scheduling(payload, missing_params)
 
-        # If any fields are missing, return elicitation
         if missing_params:
-            # Group parameters by category
-            top_level = [p for p in missing_params if "." not in p["name"] and p["name"] != "scheduling"]
-            scheduling_fields = [p for p in missing_params if p["name"].startswith("scheduling")]
-
-            message_parts = ["To create an SLO correction window, I need the following information:\n"]
-
-            if top_level:
-                message_parts.append("\n**Top-level fields:**")
-                for param in top_level:
-                    example_str = f" (e.g., {param['example']})" if "example" in param else ""
-                    message_parts.append(f"- {param['name']}: {param['description']}{example_str}")
-
-            if scheduling_fields:
-                message_parts.append("\n**Scheduling fields:**")
-                for param in scheduling_fields:
-                    example_str = f" (e.g., {param['example']})" if "example" in param else ""
-                    validation_str = f" - {param['validation']}" if "validation" in param else ""
-                    message_parts.append(f"- {param['name']}: {param['description']}{example_str}{validation_str}")
-
-            message_parts.append("\n**Note:** The startTime field should include timezone (e.g., '2026-03-10 14:00:00|IST') for accurate correction window scheduling.")
-
-            return {
-                "elicitation_needed": True,
-                "message": "\n".join(message_parts),
-                "missing_parameters": [p["name"] for p in missing_params],
-                "parameter_details": missing_params,
-                "user_prompt": "Please provide all the required fields to create the SLO correction window."
-            }
+            return self._build_correction_elicitation(missing_params)
 
         return None
 
@@ -234,7 +265,6 @@ class SLOCorrectionMCPTools(BaseInstanaClient):
                 try:
                     request_body = json.loads(payload)
                 except json.JSONDecodeError:
-                    import ast
                     request_body = ast.literal_eval(payload)
             else:
                 request_body = payload
@@ -245,9 +275,10 @@ class SLOCorrectionMCPTools(BaseInstanaClient):
                 logger.info("SLO correction config validation failed - returning elicitation")
                 return validation_result
 
-            # Additional validation for durationUnit enum
+            # durationUnit enum is already validated by _validate_correction_payload above;
+            # this check is kept as a safety net with the correct SDK-sourced values.
             scheduling_data = request_body.get("scheduling", {})
-            valid_units = ['millisecond', 'second', 'minute', 'hour', 'day', 'week', 'month']
+            valid_units = ['millisecond', 'second', 'minute', 'hour', 'day', 'week', 'calendar_month']
             if scheduling_data.get("durationUnit") not in valid_units:
                 return {"error": f"scheduling.durationUnit must be one of: {', '.join(valid_units)}"}
             # Handle startTime conversion if provided as milliseconds
@@ -310,7 +341,6 @@ class SLOCorrectionMCPTools(BaseInstanaClient):
                 try:
                     request_body = json.loads(payload)
                 except json.JSONDecodeError:
-                    import ast
                     request_body = ast.literal_eval(payload)
             else:
                 request_body = payload

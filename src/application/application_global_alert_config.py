@@ -4,6 +4,8 @@ Application Alert MCP Tools Module
 This module provides application alert configuration tools for Instana monitoring.
 """
 
+import ast
+import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
@@ -34,6 +36,211 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
         super().__init__(read_token=read_token, base_url=base_url)
 
     # CRUD Operations Dispatcher - called by application_smart_router_tool.py
+    @staticmethod
+    def _validate_alert_payload(
+        payload: Optional[Any],
+        operation: str,
+        resource_label: str = "global_alert_config",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate create/update payload against GlobalApplicationsAlertConfig SDK model.
+
+        Confirmed required fields (SDK throws 'Field required' if absent, verified by
+        calling model_validate without each field):
+          name, description, boundaryScope, evaluationType, granularity,
+          applications, tagFilterExpression, timeThreshold
+          (alertChannelIds & customPayloadFields are auto-defaulted by the service layer)
+
+        Confirmed optional (have default=None):
+          applicationId, alertChannels, enabled, gracePeriod, includeInternal,
+          includeSynthetic, rule, rules, severity, tagFilters, threshold, triggering
+
+        Returns a consolidated elicitation dict, or None when valid.
+        """
+        errors: List[str] = []
+
+        if payload is None or payload == {}:
+            return {
+                "elicitation_needed": True,
+                "reason": f"{resource_label} '{operation}': payload is missing",
+                "api_error": ["payload: required — provide the alert configuration object"],
+                "message": "Correct all issues below and retry:\n  - payload: required — provide the alert configuration object",
+            }
+
+        if not isinstance(payload, dict):
+            return {
+                "elicitation_needed": True,
+                "reason": f"{resource_label} '{operation}': payload must be a dict",
+                "api_error": [f"payload: must be a dict, got {type(payload).__name__!r}"],
+                "message": f"Correct all issues below and retry:\n  - payload: must be a dict, got {type(payload).__name__!r}",
+            }
+
+        # name and description — required strings (min_length=0, so empty string is valid)
+        for field, max_len in [("name", 256), ("description", 65536)]:
+            val = payload.get(field)
+            if val is None:
+                errors.append(f"{field}: required — string, max {max_len} chars")
+            elif not isinstance(val, str):
+                errors.append(f"{field}: must be a string, got {type(val).__name__!r}")
+            elif len(val) > max_len:
+                errors.append(f"{field}: exceeds maximum length of {max_len} characters")
+
+        # boundaryScope — required StrictStr enum
+        boundary_scope = payload.get("boundaryScope")
+        if boundary_scope is None:
+            errors.append("boundaryScope: required — valid values: 'ALL', 'INBOUND'")
+        elif boundary_scope not in ("ALL", "INBOUND"):
+            errors.append(f"boundaryScope: '{boundary_scope}' is not valid — must be 'ALL' or 'INBOUND'")
+
+        # evaluationType — required StrictStr enum
+        evaluation_type = payload.get("evaluationType")
+        _valid_eval = ("PER_AP", "PER_AP_SERVICE", "PER_AP_ENDPOINT")
+        if evaluation_type is None:
+            errors.append(f"evaluationType: required — valid values: {list(_valid_eval)}")
+        elif evaluation_type not in _valid_eval:
+            errors.append(f"evaluationType: '{evaluation_type}' is not valid — must be one of {list(_valid_eval)}")
+
+        # granularity — required StrictInt enum (verified: SDK throws 'Field required' if absent,
+        # and 'Value error' for values outside the allowed set)
+        granularity = payload.get("granularity")
+        _valid_granularity = (60000, 300000, 600000, 900000, 1200000, 1800000)
+        if granularity is None:
+            errors.append(f"granularity: required — valid values in ms: {list(_valid_granularity)}")
+        elif not isinstance(granularity, int):
+            errors.append(f"granularity: must be an integer, got {type(granularity).__name__!r}")
+        elif granularity not in _valid_granularity:
+            errors.append(f"granularity: {granularity} is not valid — must be one of {list(_valid_granularity)} ms")
+
+        # applications — required Dict (verified: SDK throws 'Field required' if absent)
+        applications = payload.get("applications")
+        if applications is None:
+            errors.append(
+                'applications: required — dict mapping applicationId → node config, e.g. '
+                '{"<appId>": {"applicationId": "<appId>", "inclusive": true, "services": {}}}'
+            )
+        elif not isinstance(applications, dict):
+            errors.append(f"applications: must be a dict, got {type(applications).__name__!r}")
+
+        # tagFilterExpression — required (verified: SDK throws 'Field required' if absent)
+        if payload.get("tagFilterExpression") is None:
+            errors.append(
+                'tagFilterExpression: required — e.g. {"type": "EXPRESSION", "logicalOperator": "AND", "elements": []}'
+            )
+
+        # timeThreshold — required (no default in SDK model)
+        if payload.get("timeThreshold") is None:
+            errors.append(
+                'timeThreshold: required — e.g. {"type": "violationsInSequence", "timeWindow": 600000}'
+            )
+
+        # severity — optional but enum-constrained (ge=5, le=10) when present
+        severity = payload.get("severity")
+        if severity is not None and severity not in (5, 10):
+            errors.append(f"severity: {severity} is not valid — must be 5 (Warning) or 10 (Critical)")
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": f"{resource_label} '{operation}' payload has {len(errors)} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The '{operation}' payload has {len(errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    @staticmethod
+    def _preflight_global_alert_config(
+        operation: str,
+        application_id: Optional[str],
+        id: Optional[str],
+        created: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        """Validate required parameters before executing a global_alert_config operation."""
+        errors: List[str] = []
+
+        if operation == "find_active" and not application_id:
+            errors.append(
+                "application_id: required for 'find_active' — "
+                "provide the application perspective ID or use application_name to resolve it automatically"
+            )
+
+        if operation in ("find", "find_versions", "update", "delete", "enable", "disable", "restore") and not id:
+            errors.append(
+                f"id: required for '{operation}' — "
+                "provide the alert configuration ID (obtain one from 'find_active')"
+            )
+
+        if operation == "restore":
+            if not created:
+                errors.append(
+                    "created: required for 'restore' — "
+                    "provide the Unix timestamp (ms) of the version to restore "
+                    "(obtain from 'find_versions')"
+                )
+            elif not isinstance(created, int) or created <= 0:
+                errors.append(
+                    f"created: must be a positive integer Unix timestamp in milliseconds, got {created!r}"
+                )
+
+        if not errors:
+            return None
+
+        return {
+            "elicitation_needed": True,
+            "reason": f"global_alert_config '{operation}' has {len(errors)} missing required parameter(s)",
+            "api_error": errors,
+            "message": (
+                f"Cannot execute '{operation}': {len(errors)} required parameter(s) missing or invalid. "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    @staticmethod
+    def _parse_payload(payload: Optional[Union[Dict[str, Any], str]]) -> Any:
+        """Parse a string payload to dict; return non-string payloads unchanged."""
+        if not isinstance(payload, str):
+            return payload
+        try:
+            return json.loads(payload)
+        except Exception:
+            try:
+                return ast.literal_eval(payload)
+            except Exception:
+                return None
+
+    async def _dispatch_global_alert_config(
+        self,
+        operation: str,
+        application_id: Optional[str],
+        id: Optional[str],
+        alert_ids: Optional[List[str]],
+        valid_on: Optional[int],
+        created: Optional[int],
+        payload: Optional[Union[Dict[str, Any], str]],
+        ctx,
+    ) -> Dict[str, Any]:
+        """Route a validated global_alert_config operation to the appropriate handler."""
+        dispatch = {
+            "find_active": lambda: self._find_active_configs(application_id, alert_ids, ctx),
+            "find_versions": lambda: self._find_config_versions(id, ctx),
+            "find": lambda: self._find_config(id, valid_on, ctx),
+            "create": lambda: self._create_config(payload, ctx),
+            "update": lambda: self._update_config(id, payload, ctx),
+            "delete": lambda: self._delete_config(id, ctx),
+            "enable": lambda: self._enable_config(id, ctx),
+            "disable": lambda: self._disable_config(id, ctx),
+            "restore": lambda: self._restore_config(id, created, ctx),
+        }
+        handler = dispatch.get(operation)
+        if handler is None:
+            return {"error": f"Operation '{operation}' not supported"}
+        return await handler()
+
     async def execute_alert_config_operation(
         self,
         operation: str,
@@ -63,26 +270,20 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
             Operation result dictionary
         """
         try:
-            if operation == "find_active":
-                return await self._find_active_configs(application_id, alert_ids, ctx)
-            elif operation == "find_versions":
-                return await self._find_config_versions(id, ctx)
-            elif operation == "find":
-                return await self._find_config(id, valid_on, ctx)
-            elif operation == "create":
-                return await self._create_config(payload, ctx)
-            elif operation == "update":
-                return await self._update_config(id, payload, ctx)
-            elif operation == "delete":
-                return await self._delete_config(id, ctx)
-            elif operation == "enable":
-                return await self._enable_config(id, ctx)
-            elif operation == "disable":
-                return await self._disable_config(id, ctx)
-            elif operation == "restore":
-                return await self._restore_config(id, created, ctx)
-            else:
-                return {"error": f"Operation '{operation}' not supported"}
+            preflight = self._preflight_global_alert_config(operation, application_id, id, created)
+            if preflight:
+                return preflight
+
+            if operation in ("create", "update"):
+                elicitation = self._validate_alert_payload(
+                    self._parse_payload(payload), operation, "global_alert_config"
+                )
+                if elicitation:
+                    return elicitation
+
+            return await self._dispatch_global_alert_config(
+                operation, application_id, id, alert_ids, valid_on, created, payload, ctx
+            )
 
         except Exception as e:
             logger.error(f"Error executing {operation}: {e}", exc_info=True)
@@ -289,8 +490,6 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
                 application_id=application_id,
                 alert_ids=alert_ids
             )
-
-            import json
 
             raw_data = response.data.decode('utf-8')
             logger.debug(f"Raw data: {raw_data}")
@@ -682,7 +881,6 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
             if isinstance(payload, str):
                 logger.debug("Payload is a string, attempting to parse")
                 try:
-                    import json
                     try:
                         parsed_payload = json.loads(payload)
                         logger.debug("Successfully parsed payload as JSON")
@@ -698,7 +896,6 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
                             request_body = parsed_payload
                         except json.JSONDecodeError:
                             # Try as Python literal
-                            import ast
                             try:
                                 parsed_payload = ast.literal_eval(payload)
                                 logger.debug("Successfully parsed payload as Python literal")
@@ -742,6 +939,11 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
                         app_config['services'] = {}
 
             # Create an GlobalApplicationsAlertConfig object from the request body
+            # NOTE: must use from_dict() (not model_validate()) so that discriminated-union
+            # fields like threshold/rules[*].thresholds are resolved via their from_dict()
+            # dispatcher, which preserves subclass fields (e.g. StaticThreshold.value).
+            # model_validate() coerces everything to the base discriminator type and silently
+            # drops fields like `value`, causing a 422 from the API.
             try:
                 logger.debug(f"Creating GlobalApplicationsAlertConfig with params: {request_body}")
                 config_object = GlobalApplicationsAlertConfig.from_dict(request_body)
@@ -846,7 +1048,6 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
             if isinstance(payload, str):
                 logger.debug("Payload is a string, attempting to parse")
                 try:
-                    import json
                     try:
                         parsed_payload = json.loads(payload)
                         logger.debug("Successfully parsed payload as JSON")
@@ -862,7 +1063,6 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
                             request_body = parsed_payload
                         except json.JSONDecodeError:
                             # Try as Python literal
-                            import ast
                             try:
                                 parsed_payload = ast.literal_eval(payload)
                                 logger.debug("Successfully parsed payload as Python literal")
@@ -902,6 +1102,7 @@ class ApplicationGlobalAlertMCPTools(BaseInstanaClient):
                         app_config['services'] = {}
 
             # Create an GlobalApplicationsAlertConfig object from the request body
+            # NOTE: must use from_dict() (not model_validate()) — same reason as create above.
             try:
                 logger.debug(f"Creating GlobalApplicationsAlertConfig with params: {request_body}")
                 config_object = GlobalApplicationsAlertConfig.from_dict(request_body)

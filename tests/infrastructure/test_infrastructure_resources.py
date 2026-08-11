@@ -162,8 +162,8 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_monitoring_state())
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to get monitoring state", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get monitoring state", (result.get("error") or result.get("message", "")))
 
     def test_get_snapshot_success(self):
         """Test get_snapshot with successful response"""
@@ -180,16 +180,16 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
     def test_get_snapshot_missing_id(self):
         result = asyncio.run(self.client.get_snapshot(snapshot_id=""))
-        self.assertIn("error", result)
-        self.assertIn("required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("required", (result.get("error") or result.get("message", "")))
 
     def test_get_snapshot_not_found_error(self):
         self.resources_api.get_snapshot.side_effect = Exception("snapshot does not exist")
 
         result = asyncio.run(self.client.get_snapshot(snapshot_id="snap1"))
 
-        self.assertIn("error", result)
-        self.assertIn("does not exist", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("does not exist", (result.get("error") or result.get("message", "")))
 
     def test_get_snapshot_validation_error_fallback_json(self):
         response = MagicMock()
@@ -221,8 +221,8 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_snapshot(snapshot_id="snap1"))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to get snapshot", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get snapshot", (result.get("error") or result.get("message", "")))
 
     def test_get_snapshots_success(self):
         """Test get_snapshots with successful response"""
@@ -278,8 +278,8 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
     def test_summarize_get_snapshots_response_summary_exception(self):
         result = self.client._summarize_get_snapshots_response({"items": [None]})
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to summarize response", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to summarize response", (result.get("error") or result.get("message", "")))
 
     def test_get_snapshots_error(self):
         """Test get_snapshots error handling"""
@@ -290,8 +290,8 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
             query="entity.tag=production"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to get snapshots", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get snapshots", (result.get("error") or result.get("message", "")))
 
     def test_post_snapshots_string_ids_success(self):
         response = MagicMock()
@@ -307,8 +307,8 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
     def test_post_snapshots_missing_ids(self):
         result = asyncio.run(self.client.post_snapshots(snapshot_ids=[], detailed=False))
-        self.assertIn("error", result)
-        self.assertIn("snapshot_ids parameter is required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("snapshot_ids parameter is required", (result.get("error") or result.get("message", "")))
 
     def test_post_snapshots_status_error(self):
         response = MagicMock()
@@ -318,8 +318,8 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.post_snapshots(snapshot_ids=['snap1'], detailed=False))
 
-        self.assertIn("error", result)
-        self.assertIn("SDK returned status 500", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("SDK returned status 500", (result.get("error") or result.get("message", "")))
 
     def test_software_versions_list_response(self):
         self.resources_api.software_versions.return_value = [
@@ -388,7 +388,7 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
             payload_key="key1"
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_snapshot_with_to_dict_method(self):
         """Test get_snapshot when result has to_dict method"""
@@ -418,7 +418,7 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_snapshot(snapshot_id="snap1"))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_snapshot_validation_error_fallback_exception(self):
         """Test get_snapshot validation error with exception in fallback"""
@@ -427,7 +427,7 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_snapshot(snapshot_id="snap1"))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_snapshots_with_to_dict_method(self):
         """Test get_snapshots when result has to_dict method"""
@@ -537,7 +537,7 @@ class TestInfrastructureResourcesMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.post_snapshots(snapshot_ids=['snap1']))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
 
 if __name__ == '__main__':

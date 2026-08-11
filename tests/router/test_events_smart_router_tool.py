@@ -80,8 +80,8 @@ class TestEventsSmartRouterMCPTool(unittest.TestCase):
             operation="invalid_op"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("invalid_op", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("invalid_op", (result.get("error") or result.get("message", "")).lower())
 
     def test_get_event(self):
         """Test get_event operation"""
@@ -160,8 +160,8 @@ class TestEventsSmartRouterMCPTool(unittest.TestCase):
             params={"event_id": "event-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Test error", str(result["error"]))
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Test error", str((result.get("error") or result.get("message", ""))))
 
     def test_params_none_handling(self):
         """Test handling when params is None"""
@@ -175,8 +175,8 @@ class TestEventsSmartRouterMCPTool(unittest.TestCase):
             params=None
         ))
 
-        # Should handle None params gracefully - check that result has either results or error
-        self.assertTrue("results" in result or "error" in result)
+        # Should handle None params gracefully
+        self.assertTrue("results" in result or "error" in result or result.get("elicitation_needed"))
 
 
     def test_get_events_basic(self):

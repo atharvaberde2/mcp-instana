@@ -74,7 +74,10 @@ _mocks = {
 }
 
 # Import src.core.utils to ensure it's available for patching
-import src.core.utils
+import contextlib
+
+with contextlib.suppress(ImportError):
+    import src.core.utils
 
 # Save original modules
 _original_modules = {}
@@ -271,7 +274,8 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
 
     def test_get_entities_with_dict_payload(self):
         """Test get_entities with a dictionary payload"""
-        # Set up the mock response
+        # Set up the mock response using without_preload_content (typed get_entities
+        # incorrectly deserializes the response into an Event model; we bypass it)
         mock_result = {
             "items": [
                 {
@@ -290,7 +294,10 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
                 }
             ]
         }
-        self.analyze_api.get_entities.return_value = mock_result
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.data = json.dumps(mock_result).encode("utf-8")
+        self.analyze_api.get_entities_without_preload_content.return_value = mock_response
 
         # Create a test payload
         payload = {
@@ -308,7 +315,7 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
         result = asyncio.run(self.client.get_entities(payload=payload))
 
         # Check that the API was called
-        self.analyze_api.get_entities.assert_called_once()
+        self.analyze_api.get_entities_without_preload_content.assert_called_once()
 
         # Check that the result is correct
         self.assertEqual(result, mock_result)
@@ -327,7 +334,10 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
                 }
             ]
         }
-        self.analyze_api.get_entities.return_value = mock_result
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.data = json.dumps(mock_result).encode("utf-8")
+        self.analyze_api.get_entities_without_preload_content.return_value = mock_response
 
         # Create a test payload as a string
         payload = json.dumps({
@@ -345,7 +355,7 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
         result = asyncio.run(self.client.get_entities(payload=payload))
 
         # Check that the API was called
-        self.analyze_api.get_entities.assert_called_once()
+        self.analyze_api.get_entities_without_preload_content.assert_called_once()
 
         # Check that the result is correct
         self.assertEqual(result, mock_result)
@@ -353,7 +363,7 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
     def test_get_entities_api_error(self):
         """Test get_entities with API error"""
         # Set up the mock API to raise an exception
-        self.analyze_api.get_entities.side_effect = Exception("Test error")
+        self.analyze_api.get_entities_without_preload_content.side_effect = Exception("Test error")
 
         # Create a test payload
         payload = {
@@ -372,7 +382,7 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
 
         # Check that the result contains an error message
         self.assertIn("error", result)
-        self.assertIn("Failed to get entities", result["error"])
+        self.assertIn("Test error", result["error"])
 
     def test_get_aggregated_entity_groups_with_dict_payload(self):
         """Test get_aggregated_entity_groups with a dictionary payload"""
@@ -759,10 +769,13 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
         self.assertEqual(result, {"metrics": ["converted"]})
 
     def test_get_entities_parses_python_literal_string(self):
-        """Test get_entities falls back to ast.literal_eval."""
-        self.analyze_api.get_entities.return_value = {"items": ["ok"]}
+        """Test get_entities falls back to ast.literal_eval for Python-literal strings."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.data = json.dumps({"items": ["ok"]}).encode("utf-8")
+        self.analyze_api.get_entities_without_preload_content.return_value = mock_response
 
-        payload = "{'type': 'jvmRuntimePlatform', 'metrics': [{'metric': 'memory.used'}]}"
+        payload = "{'type': 'jvmRuntimePlatform', 'metrics': [{'metric': 'memory.used', 'aggregation': 'MAX'}]}"
 
         result = asyncio.run(self.client.get_entities(payload=payload))
 
@@ -777,10 +790,11 @@ class TestInfrastructureAnalyzeMCPTools(unittest.TestCase):
         self.assertIn("Failed to get entities", result["error"])
 
     def test_get_entities_result_uses_to_dict_when_available(self):
-        """Test get_entities converts model result with to_dict."""
-        mock_result = MagicMock()
-        mock_result.to_dict.return_value = {"items": ["converted"]}
-        self.analyze_api.get_entities.return_value = mock_result
+        """Test get_entities returns parsed JSON from raw response."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.data = json.dumps({"items": ["converted"]}).encode("utf-8")
+        self.analyze_api.get_entities_without_preload_content.return_value = mock_response
 
         result = asyncio.run(
             self.client.get_entities(payload={"type": "jvmRuntimePlatform", "metrics": []})

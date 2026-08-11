@@ -4,9 +4,10 @@ Infrastructure Analyze MCP Tools Module
 This module provides infrastructure analysis-specific MCP tools for Instana monitoring.
 """
 
+import json
 import logging
 import sys
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 # Configure logger for this module (before imports that might fail)
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ from src.core.utils import (
     register_as_tool,
     with_header_auth,
 )
+from src.core.validation import StructureValidator
 
 
 # Helper function for debug printing
@@ -267,6 +269,31 @@ class InfrastructureAnalyzeMCPTools(BaseInstanaClient):
 
             logger.debug(f"Final request body: {request_body}")
 
+            # --- Pre-flight validation (collect ALL errors in one pass) ---
+            if isinstance(request_body, dict):
+                _sv_errors: List[str] = []
+                for _sv_fn, _sv_key, _sv_kw in [
+                    (StructureValidator.validate_tag_filter_expression, "tagFilterExpression", {}),
+                    (StructureValidator.validate_time_frame, "timeFrame", {}),
+                    (StructureValidator.validate_pagination, "pagination", {}),
+                    (StructureValidator.validate_metrics_array, "metrics", {"required": False}),
+                ]:
+                    _sv_res = _sv_fn(request_body.get(_sv_key), **_sv_kw)
+                    if _sv_res:
+                        _sv_errors.extend(_sv_res["api_error"])
+                if _sv_errors:
+                    return {
+                        "elicitation_needed": True,
+                        "reason": f"get_entities payload has {len(_sv_errors)} validation problem(s)",
+                        "api_error": _sv_errors,
+                        "message": (
+                            f"The get_entities payload has {len(_sv_errors)} problem(s). "
+                            "Correct all issues below and retry:\n"
+                            + "\n".join(f"  - {e}" for e in _sv_errors)
+                        ),
+                    }
+            # --- End validation ---
+
             # Normalize tagFilterExpression if present
             if request_body and isinstance(request_body, dict) and "tagFilterExpression" in request_body:
                 request_body["tagFilterExpression"] = self._normalize_tag_filter_expression(
@@ -284,21 +311,26 @@ class InfrastructureAnalyzeMCPTools(BaseInstanaClient):
                 logger.error(error_msg)
                 return {"error": error_msg, "request_body": request_body}
 
-            # Call the get_entities method from the SDK
-            logger.debug("Calling API method get_entities")
-            result = api_client.get_entities(
-                get_infrastructure_query=get_infra_query
-            )
+            # Use without_preload_content to get the raw HTTP response and parse it
+            # manually. The typed sdk method (get_entities) incorrectly deserializes
+            # the infrastructure payload into an Event model, causing validation errors.
+            logger.debug("Calling API method get_entities_without_preload_content")
+            try:
+                response = api_client.get_entities_without_preload_content(
+                    get_infrastructure_query=get_infra_query
+                )
 
-            # Convert the result to a dictionary
-            if hasattr(result, 'to_dict'):
-                result_dict = result.to_dict()
-            else:
-                # If it's already a dict or another format, use it as is
-                result_dict = result
+                if response.status != 200:
+                    return self.handle_api_error_response(response, "get entities", logger)
 
-            logger.debug(f"Result from get_entities: {result_dict}")
-            return result_dict
+                response_text = decode_response(response)
+                result_dict = json.loads(response_text)
+                logger.debug("Successfully parsed raw get_entities response")
+                return result_dict
+            except Exception as api_error:
+                error_msg = f"API call failed: {api_error}"
+                logger.error(error_msg)
+                return {"error": error_msg}
         except Exception as e:
             logger.error(f"Error in get_entities: {e}", exc_info=True)
             return {"error": f"Failed to get entities: {e!s}"}
@@ -358,6 +390,32 @@ class InfrastructureAnalyzeMCPTools(BaseInstanaClient):
 
             logger.debug(f"Final request body: {request_body}")
 
+            # --- Pre-flight validation (collect ALL errors in one pass) ---
+            if isinstance(request_body, dict):
+                _sv_errors: List[str] = []
+                for _sv_fn, _sv_key, _sv_kw in [
+                    (StructureValidator.validate_tag_filter_expression, "tagFilterExpression", {}),
+                    (StructureValidator.validate_time_frame, "timeFrame", {}),
+                    (StructureValidator.validate_order, "order", {}),
+                    (StructureValidator.validate_pagination, "pagination", {}),
+                    (StructureValidator.validate_metrics_array, "metrics", {"required": False}),
+                ]:
+                    _sv_res = _sv_fn(request_body.get(_sv_key), **_sv_kw)
+                    if _sv_res:
+                        _sv_errors.extend(_sv_res["api_error"])
+                if _sv_errors:
+                    return {
+                        "elicitation_needed": True,
+                        "reason": f"get_aggregated_entity_groups payload has {len(_sv_errors)} validation problem(s)",
+                        "api_error": _sv_errors,
+                        "message": (
+                            f"The get_aggregated_entity_groups payload has {len(_sv_errors)} problem(s). "
+                            "Correct all issues below and retry:\n"
+                            + "\n".join(f"  - {e}" for e in _sv_errors)
+                        ),
+                    }
+            # --- End validation ---
+
             # Normalize tagFilterExpression if present
             if request_body and isinstance(request_body, dict) and "tagFilterExpression" in request_body:
                 request_body["tagFilterExpression"] = self._normalize_tag_filter_expression(
@@ -391,7 +449,6 @@ class InfrastructureAnalyzeMCPTools(BaseInstanaClient):
                 response_text = decode_response(response)
 
                 # Parse the response as JSON
-                import json
                 result_dict = json.loads(response_text)
 
                 logger.debug("Successfully parsed raw response")

@@ -12,6 +12,12 @@ from typing import Any, Dict, List, Optional, Union
 # Constants
 DEFAULT_GROUP_BY_TAG = 'beacon.location.path'  # Default grouping by URL path
 DEFAULT_GROUP_BY_TAG_ENTITY = 'NOT_APPLICABLE'
+DEFAULT_BEACON_TYPE = 'PAGELOAD'
+DEFAULT_TIME_FRAME = {'windowSize': 3600000}
+DEFAULT_GROUP_METRICS = [{'metric': 'beaconCount', 'aggregation': 'SUM'}]
+DEFAULT_GROUP = {'groupByTag': 'beacon.page.name'}
+DEFAULT_EMPTY_EXPRESSION = {'type': 'EXPRESSION', 'logicalOperator': 'AND', 'elements': []}
+DEFAULT_BEACON_PAGINATION = {'retrievalSize': 20, 'offset': 0}
 
 
 def clean_nan_values(data: Any) -> Any:
@@ -47,12 +53,211 @@ from src.core.utils import (
     register_as_tool,
     with_header_auth,
 )
+from src.core.validation import VALID_WEBSITE_BEACON_TYPES, StructureValidator
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
 
 
 class WebsiteAnalyzeMCPTools(BaseInstanaClient):
+    def _collect_structure_validation_errors(self, validators: List[tuple[Any, Any, Dict[str, Any]]]) -> List[str]:
+        errors: List[str] = []
+        for validator, value, kwargs in validators:
+            result = validator(value, **kwargs)
+            if result:
+                errors.extend(result["api_error"])
+        return errors
+
+    def _build_validation_error_response(self, operation: str, errors: List[str]) -> Dict[str, Any]:
+        return {
+            "elicitation_needed": True,
+            "reason": f"{operation} payload has {len(errors)} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The {operation} payload has {len(errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    def _apply_beacon_group_defaults(
+        self,
+        beacon_type: Optional[str],
+        time_frame: Optional[Dict[str, int]],
+        metrics: Optional[List[Dict[str, Any]]],
+        group: Optional[Dict[str, str]],
+        tag_filter_expression: Optional[Dict[str, Any]],
+    ) -> tuple[str, Dict[str, int], List[Dict[str, Any]], Dict[str, str], Dict[str, Any]]:
+        beacon_type = beacon_type or DEFAULT_BEACON_TYPE
+        time_frame = time_frame or DEFAULT_TIME_FRAME.copy()
+        metrics = metrics or [metric.copy() for metric in DEFAULT_GROUP_METRICS]
+        group = group or DEFAULT_GROUP.copy()
+        tag_filter_expression = tag_filter_expression or {
+            "type": DEFAULT_EMPTY_EXPRESSION["type"],
+            "logicalOperator": DEFAULT_EMPTY_EXPRESSION["logicalOperator"],
+            "elements": list(DEFAULT_EMPTY_EXPRESSION["elements"]),
+        }
+        return beacon_type, time_frame, metrics, group, tag_filter_expression
+
+    def _validate_group_metrics_if_needed(
+        self,
+        user_provided_metrics: bool,
+        metrics: List[Dict[str, Any]],
+        beacon_type: str,
+        api_client,
+    ) -> Optional[Dict[str, Any]]:
+        if not user_provided_metrics:
+            return None
+
+        from instana_client.api.website_catalog_api import WebsiteCatalogApi
+
+        from src.core.metric_validation import (
+            fetch_metric_catalog_internal,
+            validate_beacon_type_known,
+            validate_metric_compatibility,
+        )
+        from src.core.utils import WEBSITE_BEACON_TYPE_MAP
+
+        beacon_type_error = validate_beacon_type_known(
+            beacon_type=beacon_type,
+            beacon_type_map=WEBSITE_BEACON_TYPE_MAP,
+        )
+        if beacon_type_error:
+            return beacon_type_error
+
+        catalog_result = fetch_metric_catalog_internal(
+            api_client=api_client,
+            catalog_api_class=WebsiteCatalogApi,
+            fetch_method_name="get_website_catalog_metrics_without_preload_content",
+        )
+        if isinstance(catalog_result, dict) and "error" in catalog_result:
+            return catalog_result
+
+        return validate_metric_compatibility(
+            metrics=metrics,
+            beacon_type=beacon_type,
+            catalog=catalog_result,
+            beacon_type_map=WEBSITE_BEACON_TYPE_MAP,
+            catalog_operation="get_metrics",
+        )
+
+    def _map_group_fields(self, group: Dict[str, str]) -> Dict[str, str]:
+        mapped_group: Dict[str, str] = {}
+        if "groupByTag" in group:
+            mapped_group["groupbyTag"] = group["groupByTag"]
+        elif "groupbyTag" in group:
+            mapped_group["groupbyTag"] = group["groupbyTag"]
+
+        if "groupByTagEntity" in group:
+            mapped_group["groupbyTagEntity"] = group["groupByTagEntity"]
+        elif "groupbyTagEntity" in group:
+            mapped_group["groupbyTagEntity"] = group["groupbyTagEntity"]
+
+        mapped_group.setdefault("groupbyTag", DEFAULT_GROUP_BY_TAG)
+        mapped_group.setdefault("groupbyTagEntity", DEFAULT_GROUP_BY_TAG_ENTITY)
+        return mapped_group
+
+    def _convert_group_tag_filter(self, tag_filter_expression: Dict[str, Any]) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        try:
+            from instana_client.models.tag_filter_expression_element import (
+                TagFilterExpressionElement,
+            )
+            tag_filter_obj = TagFilterExpressionElement.from_dict(tag_filter_expression)
+            return tag_filter_obj, None
+        except Exception as e:
+            logger.error(f"[get_website_beacon_groups] Error converting tag filter expression: {e}")
+            return None, {"error": f"Invalid tag filter expression: {e!s}"}
+
+    def _build_beacon_groups_query_params(
+        self,
+        beacon_type: str,
+        group: Dict[str, str],
+        metrics: List[Dict[str, Any]],
+        time_frame: Dict[str, int],
+        tag_filter_expression: Dict[str, Any],
+        order: Optional[Dict[str, str]],
+        pagination: Optional[Dict[str, int]],
+    ) -> Dict[str, Any] | Dict[str, str]:
+        query_params: Dict[str, Any] = {
+            "type": beacon_type,
+            "group": self._map_group_fields(group),
+            "metrics": metrics,
+            "timeFrame": time_frame,
+        }
+
+        tag_filter_obj, error = self._convert_group_tag_filter(tag_filter_expression)
+        if error:
+            return error
+        if tag_filter_obj:
+            query_params["tagFilterExpression"] = tag_filter_obj
+        if order:
+            query_params["order"] = order
+        if pagination:
+            query_params["pagination"] = pagination
+        return query_params
+
+    def _normalize_beacon_pagination(self, pagination: Optional[Dict[str, int]]) -> Dict[str, int]:
+        normalized = dict(pagination) if pagination else DEFAULT_BEACON_PAGINATION.copy()
+        retrieval_size = normalized.get("retrievalSize", DEFAULT_BEACON_PAGINATION["retrievalSize"])
+        if retrieval_size < 1:
+            normalized["retrievalSize"] = 1
+        elif retrieval_size > 200:
+            normalized["retrievalSize"] = 200
+        else:
+            normalized["retrievalSize"] = retrieval_size
+        normalized.setdefault("offset", DEFAULT_BEACON_PAGINATION["offset"])
+        return normalized
+
+    def _convert_beacon_tag_filters(self, tag_filter_expression: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not tag_filter_expression:
+            return {}
+        try:
+            from instana_client.models.deprecated_tag_filter import DeprecatedTagFilter
+            if tag_filter_expression.get("type") == "TAG_FILTER":
+                name = tag_filter_expression.get("name")
+                operator = tag_filter_expression.get("operator")
+                value = tag_filter_expression.get("value")
+                if not name or not operator or not value:
+                    return {"error": "TAG_FILTER requires 'name', 'operator', and 'value' fields"}
+                tag_filter_dict = {"name": name, "operator": operator, "value": value}
+                if "entity" in tag_filter_expression:
+                    tag_filter_dict["entity"] = tag_filter_expression.get("entity")
+                return {"tagFilters": [DeprecatedTagFilter(**tag_filter_dict)]}
+            if tag_filter_expression.get("type") == "EXPRESSION":
+                elements = tag_filter_expression.get("elements", [])
+                tag_filters = []
+                for elem in elements:
+                    if elem.get("type") == "TAG_FILTER":
+                        tag_filter_dict = {
+                            "name": elem.get("name"),
+                            "operator": elem.get("operator"),
+                            "value": elem.get("value"),
+                        }
+                        if "entity" in elem:
+                            tag_filter_dict["entity"] = elem.get("entity")
+                        tag_filters.append(DeprecatedTagFilter(**tag_filter_dict))
+                return {"tagFilters": tag_filters} if tag_filters else {}
+            return {}
+        except Exception as e:
+            logger.error(f"[get_website_beacons] Error converting tag filter expression: {e}")
+            return {"error": f"Invalid tag filter expression: {e!s}"}
+
+    def _build_beacons_query_params(
+        self,
+        beacon_type: str,
+        time_frame: Dict[str, int],
+        tag_filter_expression: Optional[Dict[str, Any]],
+        pagination: Dict[str, int],
+    ) -> Dict[str, Any]:
+        query_params: Dict[str, Any] = {
+            "type": beacon_type,
+            "timeFrame": time_frame,
+        }
+        tag_filters = self._convert_beacon_tag_filters(tag_filter_expression)
+        if "error" in tag_filters:
+            return tag_filters
+        query_params.update(tag_filters)
+        return query_params
     """Tools for website analyze in Instana MCP."""
 
     def __init__(self, read_token: str, base_url: str):
@@ -112,172 +317,64 @@ class WebsiteAnalyzeMCPTools(BaseInstanaClient):
             )
 
             user_provided_metrics = metrics is not None
+            beacon_type = beacon_type or DEFAULT_BEACON_TYPE
 
-            # Set default beacon_type if not provided (must be done before elicitation/validation)
-            if not beacon_type:
-                beacon_type = "PAGELOAD"
-                logger.debug("[get_website_beacon_groups] Applied default beacon_type: PAGELOAD")
-
-            # Two-Pass Elicitation: Check for required and recommended parameters
-            elicitation_request = self._check_elicitation_for_beacon_groups(
-                metrics, group, beacon_type
-            )
+            elicitation_request = self._check_elicitation_for_beacon_groups(metrics, group, beacon_type)
             if elicitation_request:
-                logger.debug("[get_website_beacon_groups] Elicitation needed for beacon groups")
                 return elicitation_request
 
-            # Validate tag names in tag_filter_expression and group
-            tag_validation = self._validate_tag_names(
-                tag_filter_expression,
-                group,
-                beacon_type,
-                use_case="GROUPING")
+            validation_errors = self._collect_structure_validation_errors([
+                (StructureValidator.validate_metrics_array, metrics, {"required": False}),
+                (StructureValidator.validate_group, group, {"required": False}),
+                (StructureValidator.validate_tag_filter_expression, tag_filter_expression, {}),
+                (StructureValidator.validate_time_frame, time_frame, {}),
+                (StructureValidator.validate_order, order, {}),
+                (StructureValidator.validate_pagination, pagination, {}),
+            ])
+            if validation_errors:
+                return self._build_validation_error_response("get_website_beacon_groups", validation_errors)
 
+            tag_validation = self._validate_tag_names(tag_filter_expression, group, beacon_type, use_case="GROUPING")
             if tag_validation:
-                logger.debug("[get_website_beacon_groups] Tag validation failed - elicitation needed")
                 return tag_validation
 
-            # Set default time range if not provided
-            if not time_frame:
-                time_frame = {
-                    "windowSize": 3600000  # Default to 1 hour
-                }
-                logger.debug("[get_website_beacon_groups] Applied default time_frame: 1 hour (3600000ms)")
+            beacon_type, time_frame, metrics, group, tag_filter_expression = self._apply_beacon_group_defaults(
+                beacon_type,
+                time_frame,
+                metrics,
+                group,
+                tag_filter_expression,
+            )
 
-            # Set default metrics if not provided
-            if not metrics:
-                metrics = [
-                    {
-                        "metric": "beaconCount",
-                        "aggregation": "SUM"
-                    }
-                ]
-                logger.debug("[get_website_beacon_groups] Applied default metrics: beaconCount SUM")
+            compatibility_error = self._validate_group_metrics_if_needed(
+                user_provided_metrics,
+                metrics,
+                beacon_type,
+                api_client,
+            )
+            if compatibility_error:
+                return compatibility_error
 
-            # Set default group if not provided
-            if not group:
-                group = {
-                    "groupByTag": "beacon.page.name"
-                }
-                logger.debug("[get_website_beacon_groups] Applied default group: beacon.page.name")
-
-            #If no tag_filter_expression provided, use empty EXPRESSION
-            # The API expects this field even when empty
-            if not tag_filter_expression:
-                tag_filter_expression = {
-                    "type": "EXPRESSION",
-                    "logicalOperator": "AND",
-                    "elements": []
-                }
-                logger.debug("[get_website_beacon_groups] Applied default tag filter expression: empty EXPRESSION with AND operator")
-
-            # Metric compatibility validation (last pre-flight step before query build)
-            if user_provided_metrics:
-                from instana_client.api.website_catalog_api import WebsiteCatalogApi
-
-                from src.core.metric_validation import (
-                    fetch_metric_catalog_internal,
-                    validate_beacon_type_known,
-                    validate_metric_compatibility,
-                )
-                from src.core.utils import WEBSITE_BEACON_TYPE_MAP
-
-                beacon_type_error = validate_beacon_type_known(
-                    beacon_type=beacon_type,
-                    beacon_type_map=WEBSITE_BEACON_TYPE_MAP,
-                )
-                if beacon_type_error:
-                    return beacon_type_error
-
-                catalog_result = fetch_metric_catalog_internal(
-                    api_client=api_client,
-                    catalog_api_class=WebsiteCatalogApi,
-                    fetch_method_name="get_website_catalog_metrics_without_preload_content",
-                )
-                if isinstance(catalog_result, dict) and "error" in catalog_result:
-                    return catalog_result
-
-                compatibility_error = validate_metric_compatibility(
-                    metrics=metrics,
-                    beacon_type=beacon_type,
-                    catalog=catalog_result,
-                    beacon_type_map=WEBSITE_BEACON_TYPE_MAP,
-                    catalog_operation="get_metrics",
-                )
-                if compatibility_error:
-                    return compatibility_error
-
-            # Build the query parameters for the SDK model
-            query_params = {}
-
-            # Handle required 'type' field (beacon_type is now guaranteed to have a value)
-            query_params["type"] = beacon_type
-
-            # Handle required 'group' field with field name mapping
-            if group:
-                mapped_group = {}
-
-                # Handle groupByTag/groupbyTag (support both camelCase and lowercase)
-                if "groupByTag" in group:
-                    mapped_group["groupbyTag"] = group["groupByTag"]
-                elif "groupbyTag" in group:
-                    mapped_group["groupbyTag"] = group["groupbyTag"]
-
-                # Handle groupByTagEntity/groupbyTagEntity (support both camelCase and lowercase)
-                if "groupByTagEntity" in group:
-                    mapped_group["groupbyTagEntity"] = group["groupByTagEntity"]
-                elif "groupbyTagEntity" in group:
-                    mapped_group["groupbyTagEntity"] = group["groupbyTagEntity"]
-
-                # Provide defaults for missing fields
-                if "groupbyTag" not in mapped_group:
-                    # Default to grouping by page name
-                    logger.debug(f"[get_website_beacon_groups] No groupByTag specified, using default: {DEFAULT_GROUP_BY_TAG}")
-                    mapped_group["groupbyTag"] = DEFAULT_GROUP_BY_TAG
-                if "groupbyTagEntity" not in mapped_group:
-                    # Provide default value for groupbyTagEntity when not specified
-                    logger.debug(f"[get_website_beacon_groups] No groupByTagEntity specified, using default: {DEFAULT_GROUP_BY_TAG_ENTITY}")
-                    mapped_group["groupbyTagEntity"] = DEFAULT_GROUP_BY_TAG_ENTITY
-
-                query_params["group"] = mapped_group
-
-            # Handle required 'metrics' field
-            if metrics:
-                query_params["metrics"] = metrics
-
-
-            # Handle optional fields
-            if time_frame:
-                query_params["timeFrame"] = time_frame
-            if tag_filter_expression:
-                # Convert tag filter expression dict to SDK model
-                try:
-                    from instana_client.models.tag_filter_expression_element import (
-                        TagFilterExpressionElement,
-                    )
-                    tag_filter_obj = TagFilterExpressionElement.from_dict(tag_filter_expression)
-                    query_params["tagFilterExpression"] = tag_filter_obj
-                    logger.debug(f"[get_website_beacon_groups] Converted tag filter to SDK object: {tag_filter_obj.to_dict()}")
-                except Exception as e:
-                    logger.error(f"[get_website_beacon_groups] Error converting tag filter expression: {e}")
-                    return {"error": f"Invalid tag filter expression: {e!s}"}
-            if order:
-                query_params["order"] = order
-            if pagination:
-                query_params["pagination"] = pagination
+            query_params = self._build_beacon_groups_query_params(
+                beacon_type,
+                group,
+                metrics,
+                time_frame,
+                tag_filter_expression,
+                order,
+                pagination,
+            )
+            if "error" in query_params:
+                return query_params
 
             try:
                 from instana_client.models.get_website_beacon_groups import (
                     GetWebsiteBeaconGroups,
                 )
-                logger.debug(f"[get_website_beacon_groups] Creating GetWebsiteBeaconGroups with params: {query_params}")
                 config_object = GetWebsiteBeaconGroups(**query_params)
-                logger.debug(f"[get_website_beacon_groups] Successfully created GetWebsiteBeaconGroups, Config object dict: {config_object.to_dict()}")
             except Exception as e:
                 logger.error(f"[get_website_beacon_groups] Error creating GetWebsiteBeaconGroups object: {e!s}")
-                return {
-                    "error": f"Failed to create beacon groups request: {e!s}"
-                }
+                return {"error": f"Failed to create beacon groups request: {e!s}"}
 
             # Call the get_beacon_groups method from the SDK
             logger.debug(f"[get_website_beacon_groups] Calling get_beacon_groups with fill_time_series={fill_time_series}")
@@ -503,140 +600,54 @@ class WebsiteAnalyzeMCPTools(BaseInstanaClient):
                 f"pagination={pagination}, time_frame={time_frame}"
             )
 
-            # Elicitation: Check for required parameters
+            validation_errors = self._collect_structure_validation_errors([
+                (StructureValidator.validate_beacon_type, beacon_type, {"valid_types": VALID_WEBSITE_BEACON_TYPES}),
+                (StructureValidator.validate_tag_filter_expression, tag_filter_expression, {}),
+                (StructureValidator.validate_time_frame, time_frame, {}),
+                (StructureValidator.validate_pagination, pagination, {}),
+            ])
+            if validation_errors:
+                return self._build_validation_error_response("get_website_beacons", validation_errors)
+
             if not beacon_type:
                 return {
                     "elicitation_needed": True,
                     "missing_parameters": [{
                         "name": "beacon_type",
                         "description": "Type of beacon to retrieve (REQUIRED)",
-                        "examples": ["PAGELOAD", "ERROR", "RESOURCELOAD", "HTTPREQUEST"]
+                        "examples": sorted(VALID_WEBSITE_BEACON_TYPES)
                     }],
-                    "message": "Please provide the beacon type you want to retrieve."
+                    "message": (
+                        "Please provide the beacon type you want to retrieve. "
+                        f"Valid values: {sorted(VALID_WEBSITE_BEACON_TYPES)}"
+                    )
                 }
 
-            # Validate tag names in tag_filter_expression
-            tag_validation = self._validate_tag_names(
-                tag_filter_expression,
-                None,  # get_website_beacons doesn't use group parameter
-                beacon_type,
-                use_case="FILTERING")
-
+            tag_validation = self._validate_tag_names(tag_filter_expression, None, beacon_type, use_case="FILTERING")
             if tag_validation:
-                logger.debug("[get_website_beacons] Tag validation failed - elicitation needed")
                 return tag_validation
 
-            # Set default time frame if not provided
-            if not time_frame:
-                time_frame = {"windowSize": 3600000}
-                logger.debug("[get_website_beacons] Applied default time_frame: 1 hour (3600000ms)")
+            time_frame = time_frame or DEFAULT_TIME_FRAME.copy()
+            pagination = self._normalize_beacon_pagination(pagination)
+            query_params = self._build_beacons_query_params(
+                beacon_type,
+                time_frame,
+                tag_filter_expression,
+                pagination,
+            )
+            if "error" in query_params:
+                return query_params
 
-            # Set default pagination if not provided (20 items per page, matching UI)
-            if not pagination:
-                pagination = {"retrievalSize": 20, "offset": 0}
-                logger.debug("[get_website_beacons] Applied default pagination: 20 items per page, offset 0")
-            else:
-                # Ensure retrievalSize is within valid range (1-200)
-                if "retrievalSize" in pagination:
-                    retrieval_size = pagination["retrievalSize"]
-                    if retrieval_size < 1:
-                        pagination["retrievalSize"] = 1
-                        logger.warning(f"[get_website_beacons] retrievalSize {retrieval_size} is below minimum (1), setting to 1")
-                    elif retrieval_size > 200:
-                        pagination["retrievalSize"] = 200
-                        logger.warning(f"[get_website_beacons] retrievalSize {retrieval_size} exceeds maximum (200), setting to 200")
-                else:
-                    pagination["retrievalSize"] = 20
-
-                # Set default offset if not provided
-                if "offset" not in pagination:
-                    pagination["offset"] = 0
-
-            # Build query parameters
-            query_params = {}
-
-            # Required field
-            if beacon_type:
-                query_params["type"] = beacon_type
-
-            # Optional fields
-            if time_frame:
-                query_params["timeFrame"] = time_frame
-
-            # Convert tag_filter_expression to tag_filters (LIST of DeprecatedTagFilter)
-            if tag_filter_expression:
-                try:
-                    from instana_client.models.deprecated_tag_filter import (
-                        DeprecatedTagFilter,
-                    )
-
-                    # If it's a single TAG_FILTER, convert to DeprecatedTagFilter
-                    if tag_filter_expression.get("type") == "TAG_FILTER":
-                        # Validate required fields
-                        name = tag_filter_expression.get("name")
-                        operator = tag_filter_expression.get("operator")
-                        value = tag_filter_expression.get("value")
-
-                        if not name or not operator or not value:
-                            return {"error": "TAG_FILTER requires 'name', 'operator', and 'value' fields"}
-
-                        # Extract fields (remove 'type' field as DeprecatedTagFilter doesn't have it)
-                        tag_filter_dict = {
-                            "name": name,
-                            "operator": operator,
-                            "value": value,
-                        }
-                        if "entity" in tag_filter_expression:
-                            tag_filter_dict["entity"] = tag_filter_expression.get("entity")
-
-                        tag_filter_obj = DeprecatedTagFilter(**tag_filter_dict)
-                        query_params["tagFilters"] = [tag_filter_obj]
-                        logger.debug(f"[get_website_beacons] Converted single TAG_FILTER to DeprecatedTagFilter: {tag_filter_obj.to_dict()}")
-
-                    # If it's an EXPRESSION with elements, convert each element
-                    elif tag_filter_expression.get("type") == "EXPRESSION":
-                        elements = tag_filter_expression.get("elements", [])
-                        if elements:
-                            tag_filters = []
-                            for elem in elements:
-                                if elem.get("type") == "TAG_FILTER":
-                                    tag_filter_dict = {
-                                        "name": elem.get("name"),
-                                        "operator": elem.get("operator"),
-                                        "value": elem.get("value"),
-                                    }
-                                    if "entity" in elem:
-                                        tag_filter_dict["entity"] = elem.get("entity")
-                                    tag_filters.append(DeprecatedTagFilter(**tag_filter_dict))
-
-                            if tag_filters:
-                                query_params["tagFilters"] = tag_filters
-                                logger.debug(f"[get_website_beacons] Converted {len(tag_filters)} TAG_FILTERs from EXPRESSION")
-                        else:
-                            # Empty EXPRESSION - no filters
-                            logger.debug("[get_website_beacons] Empty EXPRESSION - no tag filters applied")
-
-                except Exception as e:
-                    logger.error(f"[get_website_beacons] Error converting tag filter expression: {e}")
-                    return {"error": f"Invalid tag filter expression: {e!s}"}
-
-            # Add pagination (always present with defaults)
-            if pagination:
-                from instana_client.models.cursor_pagination import CursorPagination
-                try:
-                    pagination_obj = CursorPagination(**pagination)
-                    query_params["pagination"] = pagination_obj
-                    logger.debug(f"[get_website_beacons] Applied pagination: {pagination_obj.to_dict()}")
-                except Exception as e:
-                    logger.error(f"[get_website_beacons] Error creating CursorPagination object: {e}")
-                    return {"error": f"Invalid pagination configuration: {e!s}"}
-
-            logger.debug(f"[get_website_beacons] Creating GetWebsiteBeacons with params: {query_params}")
+            from instana_client.models.cursor_pagination import CursorPagination
+            try:
+                query_params["pagination"] = CursorPagination(**pagination)
+            except Exception as e:
+                logger.error(f"[get_website_beacons] Error creating CursorPagination object: {e}")
+                return {"error": f"Invalid pagination configuration: {e!s}"}
 
             try:
                 from instana_client.models.get_website_beacons import GetWebsiteBeacons
                 config_object = GetWebsiteBeacons(**query_params)
-                logger.debug(f"[get_website_beacons] Successfully created GetWebsiteBeacons object: {config_object.to_dict()}")
             except Exception as e:
                 logger.error(f"[get_website_beacons] Error creating GetWebsiteBeacons object: {e!s}")
                 return {"error": f"Failed to create GetWebsiteBeacons object: {e!s}"}
