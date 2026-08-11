@@ -400,7 +400,7 @@ class TestApplicationAnalyzeMCPTools(unittest.TestCase):
         self.assertIn("offset", result)
 
     def test_get_trace_details_missing_id(self):
-        """Test get_trace_details with missing trace ID"""
+        """Test get_trace_details with missing trace ID returns elicitation"""
         configuration_instance = MagicMock()
         configuration_instance.api_key = {}
         configuration_instance.api_key_prefix = {}
@@ -422,11 +422,11 @@ class TestApplicationAnalyzeMCPTools(unittest.TestCase):
             api_client=analyze_api_instance
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("must be provided", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("id" in e for e in result["api_error"]))
 
     def test_get_trace_details_invalid_retrieval_size(self):
-        """Test get_trace_details with invalid retrievalSize"""
+        """Test get_trace_details with out-of-range retrievalSize returns elicitation"""
         configuration_instance = MagicMock()
         configuration_instance.api_key = {}
         configuration_instance.api_key_prefix = {}
@@ -449,11 +449,11 @@ class TestApplicationAnalyzeMCPTools(unittest.TestCase):
             api_client=analyze_api_instance
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("between 1 and 10000", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("retrievalSize" in e for e in result["api_error"]))
 
     def test_get_trace_details_offset_without_ingestion_time(self):
-        """Test get_trace_details with offset but no ingestionTime"""
+        """Test get_trace_details with offset but no ingestionTime returns elicitation"""
         configuration_instance = MagicMock()
         configuration_instance.api_key = {}
         configuration_instance.api_key_prefix = {}
@@ -476,8 +476,37 @@ class TestApplicationAnalyzeMCPTools(unittest.TestCase):
             api_client=analyze_api_instance
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("ingestion_time must also be provided", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("ingestionTime" in e for e in result["api_error"]))
+
+    def test_get_trace_details_multiple_errors_collected(self):
+        """Test get_trace_details collects ALL errors in one pass"""
+        configuration_instance = MagicMock()
+        configuration_instance.api_key = {}
+        configuration_instance.api_key_prefix = {}
+        mock_configuration.return_value = configuration_instance
+
+        api_client_instance = MagicMock()
+        mock_api_client.return_value = api_client_instance
+
+        analyze_api_instance = MagicMock()
+        mock_analyze_api.return_value = analyze_api_instance
+
+        client = ApplicationAnalyzeMCPTools(
+            read_token=self.read_token,
+            base_url=self.base_url
+        )
+
+        # missing id + bad retrieval_size + offset without ingestion_time = 3 errors
+        result = asyncio.run(client.get_trace_details(
+            id="",
+            retrieval_size=99999,
+            offset=5,
+            api_client=analyze_api_instance
+        ))
+
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertGreaterEqual(len(result["api_error"]), 3)
 
     def test_get_trace_details_exception(self):
         """Test get_trace_details with exception"""
@@ -933,7 +962,10 @@ class TestApplicationAnalyzeMCPTools(unittest.TestCase):
         analyze_api_instance.get_trace_groups_without_preload_content = MagicMock(return_value=mock_result)
 
         result = asyncio.run(client.get_trace_groups(
-            payload={"group": {"groupbyTag": "trace.service.name", "groupbyTagEntity": "DESTINATION"}},
+            payload={
+                "group": {"groupbyTag": "trace.service.name", "groupbyTagEntity": "DESTINATION"},
+                "metrics": [{"metric": "traces", "aggregation": "SUM"}],
+            },
             api_client=analyze_api_instance
         ))
 
@@ -984,7 +1016,10 @@ class TestApplicationAnalyzeMCPTools(unittest.TestCase):
         analyze_api_instance.get_trace_groups_without_preload_content = MagicMock(side_effect=Exception("groups api error"))
 
         result = asyncio.run(client.get_trace_groups(
-            payload={"group": {"groupbyTag": "trace.service.name", "groupbyTagEntity": "DESTINATION"}},
+            payload={
+                "group": {"groupbyTag": "trace.service.name", "groupbyTagEntity": "DESTINATION"},
+                "metrics": [{"metric": "traces", "aggregation": "SUM"}],
+            },
             api_client=analyze_api_instance
         ))
 

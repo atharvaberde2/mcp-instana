@@ -554,32 +554,79 @@ class TestApplicationAlertMCPTools(unittest.TestCase):
         self.client._find_config.assert_called_once_with("alert1", 1234567890, None)
         self.assertEqual(result, {"success": True})
 
-    def test_execute_operation_create(self):
-        """Test execute_operation with create operation"""
+    def _valid_alert_payload(self):
+        """Minimal valid payload satisfying all SDK-required fields."""
+        return {
+            "name": "Test Alert",
+            "description": "Test description",
+            "boundaryScope": "INBOUND",
+            "evaluationType": "PER_AP",
+            "granularity": 600000,
+            "applications": {},
+            "tagFilterExpression": {
+                "type": "EXPRESSION",
+                "logicalOperator": "AND",
+                "elements": []
+            },
+            "timeThreshold": {
+                "type": "violationsInSequence",
+                "timeWindow": 600000
+            },
+        }
 
+    def test_execute_operation_create(self):
+        """Test execute_operation with create operation routes to _create_config when payload is valid"""
+        self.client._create_config = AsyncMock(return_value={"success": True})
+        payload = self._valid_alert_payload()
+
+        result = asyncio.run(self.client.execute_alert_config_operation(
+            operation="create",
+            payload=payload
+        ))
+
+        self.client._create_config.assert_called_once_with(payload, None)
+        self.assertEqual(result, {"success": True})
+
+    def test_execute_operation_create_invalid_payload_returns_elicitation(self):
+        """Test execute_operation create with incomplete payload returns elicitation"""
         self.client._create_config = AsyncMock(return_value={"success": True})
 
         result = asyncio.run(self.client.execute_alert_config_operation(
             operation="create",
-            payload={"name": "test"}
+            payload={"name": "test"}  # missing many required fields
         ))
 
-        self.client._create_config.assert_called_once_with({"name": "test"}, None)
-        self.assertEqual(result, {"success": True})
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertGreaterEqual(len(result["api_error"]), 1)
+        self.client._create_config.assert_not_called()
 
     def test_execute_operation_update(self):
-        """Test execute_operation with update operation"""
+        """Test execute_operation with update operation routes to _update_config when payload is valid"""
+        self.client._update_config = AsyncMock(return_value={"success": True})
+        payload = self._valid_alert_payload()
 
+        result = asyncio.run(self.client.execute_alert_config_operation(
+            operation="update",
+            id="alert1",
+            payload=payload
+        ))
+
+        self.client._update_config.assert_called_once_with("alert1", payload, None)
+        self.assertEqual(result, {"success": True})
+
+    def test_execute_operation_update_invalid_payload_returns_elicitation(self):
+        """Test execute_operation update with incomplete payload returns elicitation"""
         self.client._update_config = AsyncMock(return_value={"success": True})
 
         result = asyncio.run(self.client.execute_alert_config_operation(
             operation="update",
             id="alert1",
-            payload={"name": "Updated Alert"}
+            payload={"name": "Updated Alert"}  # missing required fields
         ))
 
-        self.client._update_config.assert_called_once_with("alert1", {"name": "Updated Alert"}, None)
-        self.assertEqual(result, {"success": True})
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertGreaterEqual(len(result["api_error"]), 1)
+        self.client._update_config.assert_not_called()
 
     def test_execute_operation_delete(self):
         """Test execute_operation with delete operation"""
@@ -1136,6 +1183,36 @@ class TestApplicationAlertMCPTools(unittest.TestCase):
         # Check that the result contains an error message
         self.assertIn("error", result)
         self.assertIn("Invalid payload format", result["error"])
+
+    # ------------------------------------------------------------------
+    # Tests for execute_alert_config_operation — "find" requires id
+    # ------------------------------------------------------------------
+
+    def test_execute_alert_config_find_missing_id_returns_elicitation(self):
+        """'find' without id must return elicitation_needed (SDK requires id)."""
+        result = asyncio.run(self.client.execute_alert_config_operation(
+            operation="find",
+            application_id=None,
+            id=None,
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("id" in e for e in result["api_error"]))
+
+    def test_execute_alert_config_find_with_id_proceeds(self):
+        """'find' with a valid id skips the elicitation gate."""
+        # Stub the underlying low-level method so we don't hit the network.
+        mock_result = {"id": "alert-1", "name": "Test"}
+        mock_obj = MagicMock()
+        mock_obj.to_dict.return_value = mock_result
+        self.alert_config_api.find_application_alert_config.return_value = mock_obj
+
+        result = asyncio.run(self.client.execute_alert_config_operation(
+            operation="find",
+            id="alert-1",
+        ))
+        # Should not be an elicitation response
+        self.assertFalse(result.get("elicitation_needed", False))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -39,6 +39,10 @@ def mock_with_header_auth(api_class, allow_mock=False):
     return decorator
 
 
+# Pre-load the automation modules so patch() can find their attributes
+import src.automation.action_catalog
+import src.automation.action_history
+
 # Patch the with_header_auth decorator and the client imports
 with patch('src.core.utils.with_header_auth', mock_with_header_auth):
     # Mock the client classes at their import location
@@ -86,8 +90,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="test"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("invalid_type", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("invalid_type", (result.get("error") or result.get("message", "")).lower())
 
     def test_invalid_catalog_operation(self):
         """Test invalid operation for catalog resource type"""
@@ -96,8 +100,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="invalid_op"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("invalid_op", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("invalid_op", (result.get("error") or result.get("message", "")).lower())
 
     def test_get_actions(self):
         """Test get_actions operation"""
@@ -137,8 +141,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="get_action_details"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("action_id", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("action_id", (result.get("error") or result.get("message", "")).lower())
 
     def test_get_action_matches(self):
         """Test get_action_matches operation"""
@@ -162,8 +166,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="get_action_matches"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("payload", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("payload", (result.get("error") or result.get("message", "")).lower())
 
     def test_get_action_matches_by_id(self):
         """Test get_action_matches_by_id_and_time_window operation"""
@@ -187,7 +191,7 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="get_action_matches_by_id_and_time_window"
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_types(self):
         """Test get_action_types operation"""
@@ -256,8 +260,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="get_details"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("action_instance_id", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("action_instance_id", (result.get("error") or result.get("message", "")).lower())
 
     def test_invalid_history_operation(self):
         """Test invalid operation for history resource type"""
@@ -266,8 +270,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="invalid_op"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("invalid_op", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("invalid_op", (result.get("error") or result.get("message", "")).lower())
 
     def test_catalog_exception_handling(self):
         """Test exception handling in catalog operations"""
@@ -281,8 +285,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="get_actions"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Test error", str(result["error"]))
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Test error", str((result.get("error") or result.get("message", ""))))
 
     def test_history_exception_handling(self):
         """Test exception handling in history operations"""
@@ -296,8 +300,8 @@ class TestAutomationSmartRouterMCPTool(unittest.TestCase):
             operation="list"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Test error", str(result["error"]))
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Test error", str((result.get("error") or result.get("message", ""))))
 
 
 if __name__ == '__main__':

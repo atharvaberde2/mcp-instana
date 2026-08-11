@@ -354,7 +354,7 @@ class TestSLOCorrectionMCPTools(unittest.TestCase):
         asyncio.run(run_test())
 
     def test_create_correction_invalid_duration_unit(self):
-        """Test creating correction with invalid durationUnit."""
+        """Invalid durationUnit is now caught by the validator before hitting the API."""
         async def run_test():
             payload = {
                 "name": "Test Correction",
@@ -364,8 +364,9 @@ class TestSLOCorrectionMCPTools(unittest.TestCase):
 
             result = await self.client.create_correction(payload=payload)
 
-            self.assertIn("error", result)
-            self.assertIn("durationUnit", result["error"])
+            # Validator returns elicitation_needed with the invalid field listed
+            self.assertIn("elicitation_needed", result)
+            self.assertIn("scheduling.durationUnit", result["missing_parameters"])
 
         asyncio.run(run_test())
 
@@ -561,6 +562,71 @@ class TestSLOCorrectionMCPTools(unittest.TestCase):
             result = await self.client.delete_correction(id="corr-123")
 
             self.assertIn("error", result)
+
+        asyncio.run(run_test())
+
+
+    # ── New validation tests for enum / range checks ──────────────────────
+
+    def test_validate_correction_payload_invalid_duration_unit(self):
+        """scheduling.durationUnit with a bad value should be rejected by the validator."""
+        payload = {
+            "name": "Test Correction",
+            "sloIds": ["slo-1"],
+            "scheduling": {"duration": 2, "durationUnit": "month"}
+        }
+        result = self.client._validate_correction_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("scheduling.durationUnit", result["missing_parameters"])
+        detail = next(p for p in result["parameter_details"] if p["name"] == "scheduling.durationUnit")
+        self.assertIn("error", detail)
+
+    def test_validate_correction_payload_calendar_month_is_valid(self):
+        """calendar_month is the correct SDK value for monthly corrections."""
+        payload = {
+            "name": "Test Correction",
+            "sloIds": ["slo-1"],
+            "scheduling": {"duration": 1, "durationUnit": "calendar_month"}
+        }
+        result = self.client._validate_correction_payload(payload)
+        self.assertIsNone(result)
+
+    def test_validate_correction_payload_non_positive_duration(self):
+        """scheduling.duration <= 0 should be rejected."""
+        payload = {
+            "name": "Test Correction",
+            "sloIds": ["slo-1"],
+            "scheduling": {"duration": 0, "durationUnit": "hour"}
+        }
+        result = self.client._validate_correction_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("scheduling.duration", result["missing_parameters"])
+
+    def test_validate_correction_payload_consolidated_errors(self):
+        """Multiple scheduling errors should all appear in a single elicitation response."""
+        payload = {
+            "name": "Test Correction",
+            "sloIds": ["slo-1"],
+            "scheduling": {"duration": -1, "durationUnit": "month"}
+        }
+        result = self.client._validate_correction_payload(payload)
+        self.assertIsNotNone(result)
+        self.assertIn("scheduling.duration", result["missing_parameters"])
+        self.assertIn("scheduling.durationUnit", result["missing_parameters"])
+
+    def test_create_correction_invalid_duration_unit_now_caught_by_validator(self):
+        """After the fix, an invalid durationUnit is caught by _validate_correction_payload,
+        not the downstream safety-net check, and the response uses elicitation_needed."""
+        async def run_test():
+            payload = {
+                "name": "Test Correction",
+                "sloIds": ["slo-1"],
+                "scheduling": {"duration": 2, "durationUnit": "month", "startTime": 1609459200000}
+            }
+            result = await self.client.create_correction(payload=payload)
+            # Should return elicitation from the validator (not a bare error string)
+            self.assertIn("elicitation_needed", result)
+            self.assertIn("scheduling.durationUnit", result["missing_parameters"])
 
         asyncio.run(run_test())
 

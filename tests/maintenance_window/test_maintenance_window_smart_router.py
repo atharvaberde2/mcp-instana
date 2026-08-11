@@ -84,8 +84,8 @@ class TestMaintenanceWindowSmartRouter(unittest.TestCase):
     def test_invalid_resource_type_returns_error(self):
         """Unknown resource_type returns an error dict."""
         result = asyncio.run(self.router.manage_maintenance_windows(resource_type="unknown_type", operation="create"))
-        self.assertIn("error", result)
-        self.assertIn("unknown_type", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("unknown_type", (result.get("error") or result.get("message", "")))
 
     def test_valid_resource_type_window(self):
         """resource_type='window' routes to _handle_window."""
@@ -108,12 +108,12 @@ class TestMaintenanceWindowSmartRouter(unittest.TestCase):
     def test_invalid_window_operation_returns_error(self):
         """Invalid operation for resource_type='window' returns an error."""
         result = asyncio.run(self.router.manage_maintenance_windows(resource_type="window", operation="nonexistent_op"))
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_invalid_templates_operation_returns_error(self):
         """Invalid operation for resource_type='templates' returns an error."""
         result = asyncio.run(self.router.manage_maintenance_windows(resource_type="templates", operation="create"))
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     # -------------------------------------------------------------------------
     # create operation
@@ -338,8 +338,8 @@ class TestMaintenanceWindowSmartRouter(unittest.TestCase):
 
         result = asyncio.run(self.router.manage_maintenance_windows(resource_type="window", operation="list_active"))
 
-        self.assertIn("error", result)
-        self.assertIn("Instana API unavailable", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Instana API unavailable", (result.get("error") or result.get("message", "")))
 
     def test_validate_operation(self):
         """validate operation routes correctly to the underlying client."""
@@ -563,22 +563,22 @@ class TestMaintenanceWindowSmartRouter(unittest.TestCase):
     # -------------------------------------------------------------------------
 
     def test_invalid_resource_type_provides_suggestion(self):
-        """Invalid resource_type error includes suggestion."""
+        """Invalid resource_type error includes suggestion (now in api_error[*].expected)."""
         result = asyncio.run(self.router.manage_maintenance_windows(resource_type="invalid", operation="create"))
-        self.assertIn("error", result)
-        self.assertIn("suggestion", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("api_error", result)
 
     def test_invalid_window_operation_lists_valid_operations(self):
-        """Invalid window operation error lists valid operations."""
+        """Invalid window operation error lists valid operations (now in api_error[*].expected)."""
         result = asyncio.run(self.router.manage_maintenance_windows(resource_type="window", operation="invalid_op"))
-        self.assertIn("error", result)
-        self.assertIn("valid_operations", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("api_error", result)
 
     def test_invalid_templates_operation_provides_hint(self):
-        """Invalid templates operation error provides hint."""
+        """Invalid templates operation error provides hint (now in api_error[*].hint)."""
         result = asyncio.run(self.router.manage_maintenance_windows(resource_type="templates", operation="create"))
-        self.assertIn("error", result)
-        self.assertIn("hint", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertTrue(any("hint" in e for e in result.get("api_error", []) if isinstance(e, dict)))
 
     # -------------------------------------------------------------------------
     # Context parameter passing

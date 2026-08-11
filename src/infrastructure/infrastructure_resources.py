@@ -4,6 +4,8 @@ Infrastructure Resources MCP Tools Module
 This module provides infrastructure resources-specific MCP tools for Instana monitoring.
 """
 
+import ast
+import json
 import logging
 import sys
 from datetime import datetime
@@ -139,7 +141,18 @@ class InfrastructureResourcesMCPTools(BaseInstanaClient):
             logger.debug(f"get_snapshot called with snapshot_id={snapshot_id}")
 
             if not snapshot_id:
-                return {"error": "snapshot_id parameter is required"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "snapshot_id",
+                            "issue": "snapshot_id is required to retrieve snapshot details",
+                            "hint": "Use get_snapshots to discover available snapshot IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'snapshot_id'. Use get_snapshots to discover available snapshot IDs."
+                }
 
             # Try using the standard SDK method
             try:
@@ -193,7 +206,6 @@ class InfrastructureResourcesMCPTools(BaseInstanaClient):
                         response_text = response_data.data.decode('utf-8')
 
                         # Try to parse as JSON
-                        import json
                         try:
                             result_dict = json.loads(response_text)
                             logger.info(f"Result from fallback method: {result_dict}")
@@ -396,7 +408,6 @@ class InfrastructureResourcesMCPTools(BaseInstanaClient):
             # Handle string input conversion
             if isinstance(snapshot_ids, str):
                 if snapshot_ids.startswith('[') and snapshot_ids.endswith(']'):
-                    import ast
                     snapshot_ids = ast.literal_eval(snapshot_ids)
                 else:
                     snapshot_ids = [id.strip() for id in snapshot_ids.split(',')]
@@ -435,7 +446,6 @@ class InfrastructureResourcesMCPTools(BaseInstanaClient):
 
                 if response.status == 200:
                     # Parse the JSON response manually
-                    import json
                     response_text = response.data.decode('utf-8')
                     result_dict = json.loads(response_text)
 

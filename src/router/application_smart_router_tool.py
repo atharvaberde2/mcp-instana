@@ -260,18 +260,22 @@ Examples:
                 params = {}
 
             # Validate resource_type
-            if resource_type not in [
-                "metrics",
-                "alert_config",
-                "global_alert_config",
-                "settings",
-                "catalog",
-                "resources",
-                "analyze",
-            ]:
+            _valid_resource_types = [
+                "metrics", "alert_config", "global_alert_config",
+                "settings", "catalog", "resources", "analyze",
+            ]
+            if resource_type not in _valid_resource_types:
                 return {
-                    "error": f"Invalid resource_type '{resource_type}'. Must be 'metrics', 'alert_config', 'global_alert_config', 'settings', 'catalog', 'resources', or 'analyze'",
-                    "suggestion": "Choose 'metrics' for querying data, 'alert_config' for application-specific alerts, 'global_alert_config' for global alerts, 'settings' for application perspective configurations, 'catalog' for tag and metric catalog information, 'resources' for application resources queries, or 'analyze' for trace analysis",
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"'{resource_type}' is not a valid resource type",
+                            "expected": _valid_resource_types
+                        }
+                    ],
+                    "message": f"Invalid resource_type '{resource_type}'. Must be one of: {_valid_resource_types}"
                 }
 
             # Route to the appropriate resource handler
@@ -291,16 +295,16 @@ Examples:
                 return await self._handle_analyze(operation, params, ctx)
             else:
                 return {
-                    "error": f"Unsupported resource_type: {resource_type}",
-                    "supported_types": [
-                        "metrics",
-                        "alert_config",
-                        "global_alert_config",
-                        "settings",
-                        "catalog",
-                        "resources",
-                        "analyze",
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"Unsupported resource_type: '{resource_type}'",
+                            "expected": _valid_resource_types
+                        }
                     ],
+                    "message": f"Unsupported resource_type '{resource_type}'. Must be one of: {_valid_resource_types}"
                 }
 
         except Exception as e:
@@ -318,6 +322,20 @@ Examples:
         ctx
     ) -> Dict[str, Any]:
         """Handle application metrics queries."""
+        # Convert datetime string for time_frame.to if provided
+        conversion_result = convert_nested_datetime_param(
+            params, "time_frame", "to", default_timezone="UTC"
+        )
+        if "error" in conversion_result:
+            return {
+                "elicitation_needed": True,
+                "reason": "invalid_time_params",
+                "api_error": [conversion_result["error"]],
+                "message": conversion_result["error"],
+            }
+        if conversion_result["converted"]:
+            params["time_frame"] = conversion_result["params"]["time_frame"]
+
         # Extract parameters
         time_frame = params.get("time_frame")
         metrics = params.get("metrics")
@@ -363,8 +381,16 @@ Examples:
 
         if operation not in valid_operations:
             return {
-                "error": f"Invalid operation '{operation}' for alert_config",
-                "valid_operations": valid_operations
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid alert_config operation",
+                        "expected": valid_operations
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'alert_config'. Valid operations: {valid_operations}"
             }
 
         # Extract parameters
@@ -425,8 +451,16 @@ Examples:
 
         if operation not in valid_operations:
             return {
-                "error": f"Invalid operation '{operation}' for global_alert_config",
-                "valid_operations": valid_operations
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid global_alert_config operation",
+                        "expected": valid_operations
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'global_alert_config'. Valid operations: {valid_operations}"
             }
 
         # Extract parameters
@@ -530,8 +564,16 @@ Examples:
 
         if operation not in valid_operations:
             return {
-                "error": f"Invalid operation '{operation}' for settings",
-                "valid_operations": valid_operations
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid settings operation",
+                        "expected": valid_operations
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'settings'. Valid operations: {valid_operations}"
             }
 
         # Extract parameters
@@ -541,12 +583,20 @@ Examples:
         payload = params.get("payload")
         request_body = params.get("request_body")
 
-        valid_subtypes = ["application"]
+        valid_subtypes = ["application", "endpoint", "service", "manual_service"]
 
         if resource_subtype not in valid_subtypes:
             return {
-                "error": f"Invalid or missing resource_subtype. Must be one of: {valid_subtypes}",
-                "resource_subtype": resource_subtype
+                "elicitation_needed": True,
+                "reason": f"Invalid or missing resource_subtype: {resource_subtype!r}",
+                "api_error": [
+                    f"resource_subtype: {resource_subtype!r} is not valid. "
+                    f"Must be one of: {valid_subtypes}"
+                ],
+                "message": (
+                    f"'resource_subtype' value {resource_subtype!r} is not valid. "
+                    f"Accepted values are: {valid_subtypes}."
+                ),
             }
 
         # If application_name is provided, resolve it to application ID
@@ -561,6 +611,9 @@ Examples:
                 return error
 
         # Route to the settings client
+        # Note: payload validation for create/update is handled inside the service layer
+        # (_validate_settings_payload is called in each _add_* / _update_* method).
+        # No duplicate validation here.
         result = await self.app_settings_client.execute_settings_operation(
             operation=operation,
             resource_subtype=resource_subtype,
@@ -660,8 +713,16 @@ Examples:
 
         if operation not in valid_operations:
             return {
-                "error": f"Invalid operation '{operation}' for analyze",
-                "valid_operations": valid_operations,
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid analyze operation",
+                        "expected": valid_operations
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'analyze'. Valid operations: {valid_operations}"
             }
 
         # Convert datetime string for timeFrame.to in payload
@@ -719,8 +780,16 @@ Examples:
 
         if operation not in valid_operations:
             return {
-                "error": f"Invalid operation '{operation}' for catalog",
-                "valid_operations": valid_operations
+                "elicitation_needed": True,
+                "reason": f"Invalid operation {operation!r} for catalog",
+                "api_error": [
+                    f"operation: {operation!r} is not valid for resource_type 'catalog'. "
+                    f"Must be one of: {valid_operations}"
+                ],
+                "message": (
+                    f"operation {operation!r} is not valid for resource_type 'catalog'. "
+                    f"Accepted values are: {valid_operations}."
+                ),
             }
 
         # Extract parameters
@@ -757,8 +826,16 @@ Examples:
             }
 
         return {
-            "error": f"Unsupported catalog operation: {operation}",
-            "valid_operations": valid_operations
+            "elicitation_needed": True,
+            "reason": "invalid_operation",
+            "api_error": [
+                {
+                    "field": "operation",
+                    "issue": f"'{operation}' is not a valid catalog operation",
+                    "expected": valid_operations
+                }
+            ],
+            "message": f"Invalid operation '{operation}' for resource_type 'catalog'. Valid operations: {valid_operations}"
         }
 
     async def _handle_resources(
@@ -777,8 +854,16 @@ Examples:
 
         if operation not in valid_operations:
             return {
-                "error": f"Invalid operation '{operation}' for resources",
-                "valid_operations": valid_operations
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid resources operation",
+                        "expected": valid_operations
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'resources'. Valid operations: {valid_operations}"
             }
 
         # Extract all parameters

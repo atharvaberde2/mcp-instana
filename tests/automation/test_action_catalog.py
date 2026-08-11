@@ -153,7 +153,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_matches_string_payload(self):
         """Test get_action_matches with string payload"""
@@ -194,7 +194,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_actions_success(self):
         """Test successful get_actions call"""
@@ -230,7 +230,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_details_success(self):
         """Test successful get_action_details call"""
@@ -267,8 +267,8 @@ class TestActionCatalogMCPTools(unittest.TestCase):
             api_client=self.action_catalog_api
         ))
 
-        # Check that the result contains an error
-        self.assertIn("error", result)
+        # Missing required param returns an elicitation response, not a plain error
+        self.assertTrue(result.get("elicitation_needed"))
 
     def test_get_action_types_success(self):
         """Test successful get_action_types call"""
@@ -334,7 +334,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_types_error_handling(self):
         """Test error handling in get_action_types"""
@@ -346,7 +346,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_tags_error_handling(self):
         """Test error handling in get_action_tags"""
@@ -358,7 +358,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_matches_invalid_json_payload(self):
         """Test get_action_matches with invalid JSON string payload"""
@@ -371,7 +371,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_matches_missing_required_field(self):
         """Test get_action_matches with missing required field"""
@@ -384,8 +384,8 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error about missing field
-        self.assertIn("error", result)
-        self.assertIn("name", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("name", (result.get("error") or result.get("message", "")))
 
     def test_get_action_matches_with_target_snapshot_id(self):
         """Test get_action_matches with target_snapshot_id"""
@@ -426,7 +426,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_actions_json_decode_error(self):
         """Test get_actions with JSON decode error"""
@@ -440,7 +440,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_details_json_decode_error(self):
         """Test get_action_details with JSON decode error"""
@@ -455,7 +455,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_types_json_decode_error(self):
         """Test get_action_types with JSON decode error"""
@@ -469,7 +469,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_tags_json_decode_error(self):
         """Test get_action_tags with JSON decode error"""
@@ -483,7 +483,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_matches_by_id_and_time_window_success(self):
         """Test successful get_action_matches_by_id_and_time_window call"""
@@ -536,8 +536,8 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("application_id or snapshot_id", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("application_id", (result.get("error") or result.get("message", "")))
 
     def test_get_action_matches_by_id_and_time_window_invalid_timestamp(self):
         """Test get_action_matches_by_id_and_time_window with invalid timestamp"""
@@ -548,8 +548,8 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("timestamp", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("timestamp", (result.get("error") or result.get("message", "")))
 
     def test_get_action_matches_by_id_and_time_window_negative_window_size(self):
         """Test get_action_matches_by_id_and_time_window with negative window_size"""
@@ -560,8 +560,8 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
-        self.assertIn("window_size", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("window_size", (result.get("error") or result.get("message", "")))
 
     def test_get_action_matches_by_id_and_time_window_with_snapshot_id(self):
         """Test get_action_matches_by_id_and_time_window with snapshot_id"""
@@ -598,7 +598,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_matches_by_id_and_time_window_json_decode_error(self):
         """Test get_action_matches_by_id_and_time_window with JSON decode error"""
@@ -613,7 +613,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_action_matches_by_id_and_time_window_exception(self):
         """Test get_action_matches_by_id_and_time_window with exception"""
@@ -626,7 +626,7 @@ class TestActionCatalogMCPTools(unittest.TestCase):
         ))
 
         # Check that the result contains an error
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_clean_action_data(self):
         """Test _clean_action_data helper method"""

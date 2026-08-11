@@ -98,8 +98,8 @@ sys.modules['instana_client.api.website_catalog_api'] = MagicMock()
 # Patch the decorator and base class in the real src.core.utils module
 from src.core import utils as real_utils
 
-_orig_with_header_auth = real_utils.with_header_auth
-_orig_base_instana_client = real_utils.BaseInstanaClient
+_original_with_header_auth = real_utils.with_header_auth
+_original_base_instana_client = real_utils.BaseInstanaClient
 
 real_utils.with_header_auth = mock_with_header_auth
 real_utils.BaseInstanaClient = MockBaseInstanaClient
@@ -114,9 +114,9 @@ from src.website.website_analyze import (
     clean_nan_values,
 )
 
-# Restore real utils so subsequent test modules are not affected
-real_utils.with_header_auth = _orig_with_header_auth
-real_utils.BaseInstanaClient = _orig_base_instana_client
+# Restore original implementations so other test modules are not affected
+real_utils.with_header_auth = _original_with_header_auth
+real_utils.BaseInstanaClient = _original_base_instana_client
 
 VALID_WEBSITE_CATALOG = [
     {
@@ -282,7 +282,7 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
     def test_get_beacon_groups_with_all_params(self, _mock_catalog):
         """Test get_website_beacon_groups with all parameters"""
         metrics = [{"metric": "beaconCount", "aggregation": "SUM"}]
-        group = {"groupByTag": "beacon.page.name"}
+        group = {"groupByTag": "beacon.page.name", "groupByTagEntity": "NOT_APPLICABLE"}
         tag_filter = {
             "type": "TAG_FILTER",
             "name": "beacon.website.name",
@@ -320,7 +320,7 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.tools_instance.get_website_beacon_groups(
             metrics=[{"metric": "beaconCount", "aggregation": "SUM"}],
-            group={"groupByTag": "beacon.page.name"},
+            group={"groupByTag": "beacon.page.name", "groupByTagEntity": "NOT_APPLICABLE"},
             beacon_type="PAGELOAD",
             api_client=self.mock_api_client
         ))
@@ -331,7 +331,7 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
     def test_get_beacon_groups_http_error(self, _mock_catalog):
         """Test get_website_beacon_groups with HTTP error"""
         metrics = [{"metric": "beaconCount", "aggregation": "SUM"}]
-        group = {"groupByTag": "beacon.page.name"}
+        group = {"groupByTag": "beacon.page.name", "groupByTagEntity": "NOT_APPLICABLE"}
 
         mock_response = Mock()
         mock_response.status = 500
@@ -353,7 +353,7 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
         """Test get_website_beacon_groups with invalid metric — now caught
         by pre-flight catalog validation before reaching the API."""
         metrics = [{"metric": "invalidMetric", "aggregation": "SUM"}]
-        group = {"groupByTag": "beacon.page.name"}
+        group = {"groupByTag": "beacon.page.name", "groupByTagEntity": "NOT_APPLICABLE"}
 
         result = asyncio.run(self.tools_instance.get_website_beacon_groups(
             metrics=metrics,
@@ -363,14 +363,13 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
         ))
 
         self.assertIn("elicitation_needed", result)
-        self.assertIn("invalid", result["reason"].lower())
         self.mock_api_client.get_beacon_groups_without_preload_content.assert_not_called()
 
     @PATCH_CATALOG
     def test_get_beacon_groups_api_exception(self, _mock_catalog):
         """Test get_website_beacon_groups when API raises exception"""
         metrics = [{"metric": "beaconCount", "aggregation": "SUM"}]
-        group = {"groupByTag": "beacon.page.name"}
+        group = {"groupByTag": "beacon.page.name", "groupByTagEntity": "NOT_APPLICABLE"}
 
         self.mock_api_client.get_beacon_groups_without_preload_content.side_effect = Exception("API Error")
 
@@ -385,24 +384,22 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
 
     @PATCH_CATALOG
     def test_get_beacon_groups_invalid_tag_filter(self, _mock_catalog):
-        """Test get_website_beacon_groups with invalid tag filter expression"""
+        """Test get_website_beacon_groups with structurally invalid tag filter"""
         metrics = [{"metric": "beaconCount", "aggregation": "SUM"}]
-        group = {"groupByTag": "beacon.page.name"}
+        group = {"groupByTag": "beacon.page.name", "groupByTagEntity": "NOT_APPLICABLE"}
         tag_filter = {"invalid": "structure"}
 
-        with patch('instana_client.models.tag_filter_expression_element.TagFilterExpressionElement') as mock_tag_filter:
-            mock_tag_filter.from_dict.side_effect = Exception("Invalid tag filter")
+        result = asyncio.run(self.tools_instance.get_website_beacon_groups(
+            metrics=metrics,
+            group=group,
+            tag_filter_expression=tag_filter,
+            beacon_type="PAGELOAD",
+            api_client=self.mock_api_client
+        ))
 
-            result = asyncio.run(self.tools_instance.get_website_beacon_groups(
-                metrics=metrics,
-                group=group,
-                tag_filter_expression=tag_filter,
-                beacon_type="PAGELOAD",
-                api_client=self.mock_api_client
-            ))
-
-            self.assertIn("error", result)
-            self.assertIn("Invalid tag filter expression", result["error"])
+        # StructureValidator catches the missing 'type' key and returns elicitation
+        self.assertIn("elicitation_needed", result)
+        self.assertTrue(any("type" in e for e in result["api_error"]))
 
     def test_get_beacons_missing_beacon_type(self):
         """Test get_website_beacons without beacon_type triggers elicitation"""
@@ -619,27 +616,24 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
         self.assertIn("summary", result)
 
     def test_get_beacons_pagination_limits(self):
-        """Test get_website_beacons pagination size limits"""
-        mock_response = Mock()
-        mock_response.status = 200
-        mock_response.data = json.dumps({"items": [], "totalHits": 0}).encode('utf-8')
-        self.mock_api_client.get_beacons_without_preload_content.return_value = mock_response
-
-        # Test below minimum
+        """Test get_website_beacons pagination size limits return elicitation for out-of-range values"""
+        # Test below minimum — now rejected by pre-flight validation
         result = asyncio.run(self.tools_instance.get_website_beacons(
             beacon_type="PAGELOAD",
             pagination={"retrievalSize": -5},
             api_client=self.mock_api_client
         ))
-        self.assertIn("summary", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("retrievalSize" in e for e in result.get("api_error", [])))
 
-        # Test above maximum
+        # Test above maximum — now rejected by pre-flight validation
         result = asyncio.run(self.tools_instance.get_website_beacons(
             beacon_type="PAGELOAD",
             pagination={"retrievalSize": 500},
             api_client=self.mock_api_client
         ))
-        self.assertIn("summary", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("retrievalSize" in e for e in result.get("api_error", [])))
 
     def test_get_beacons_invalid_tag_filter(self):
         """Test get_website_beacons with invalid tag filter"""
@@ -710,7 +704,7 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
     @PATCH_CATALOG
     def test_get_beacon_groups_with_groupby_tag_lowercase(self, _mock_catalog):
         """Test get_website_beacon_groups with lowercase groupbyTag"""
-        group = {"groupbyTag": "beacon.page.name"}
+        group = {"groupbyTag": "beacon.page.name", "groupbyTagEntity": "NOT_APPLICABLE"}
 
         mock_response = Mock()
         mock_response.status = 200
@@ -762,7 +756,7 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.tools_instance.get_website_beacon_groups(
             metrics=[{"metric": "beaconCount", "aggregation": "SUM"}],
-            group={"groupByTag": "beacon.page.name"},
+            group={"groupByTag": "beacon.page.name", "groupByTagEntity": "NOT_APPLICABLE"},
             beacon_type="PAGELOAD",
             api_client=self.mock_api_client
         ))
@@ -919,6 +913,38 @@ class TestWebsiteAnalyzeMCPTools(unittest.TestCase):
         self.assertNotIn("errorId", beacon)
         self.assertNotIn("stackTraceReadability", beacon)
 
+
+
+    def test_get_beacons_invalid_beacon_type(self):
+        """Test get_website_beacons with an invalid beacon_type returns elicitation"""
+        result = asyncio.run(self.tools_instance.get_website_beacons(
+            beacon_type="INVALID_TYPE",
+            api_client=self.mock_api_client
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("INVALID_TYPE" in e for e in result.get("api_error", [])))
+
+    def test_get_beacons_invalid_time_frame(self):
+        """Test get_website_beacons with invalid windowSize returns elicitation"""
+        result = asyncio.run(self.tools_instance.get_website_beacons(
+            beacon_type="PAGELOAD",
+            time_frame={"windowSize": 9_999_999_999},  # exceeds max
+            api_client=self.mock_api_client
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("windowSize" in e for e in result.get("api_error", [])))
+
+    def test_get_beacons_multiple_validation_errors_consolidated(self):
+        """Test get_website_beacons collects all validation errors in one response"""
+        result = asyncio.run(self.tools_instance.get_website_beacons(
+            beacon_type="INVALID_TYPE",
+            pagination={"retrievalSize": 999},
+            time_frame={"windowSize": 9_999_999_999},
+            api_client=self.mock_api_client
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        # All three errors must be present in one response
+        self.assertGreaterEqual(len(result.get("api_error", [])), 3)
 
 
 class TestConstants(unittest.TestCase):

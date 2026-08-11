@@ -4,6 +4,7 @@ SLO Configuration MCP Tools Module
 This module provides SLO (Service Level Objective) configuration tools for Instana.
 """
 
+import ast
 import json
 import logging
 from typing import Any, Dict, List, Optional, Union
@@ -22,232 +23,340 @@ from src.core.utils import BaseInstanaClient, with_header_auth
 # Configure logger for this module
 logger = logging.getLogger(__name__)
 
+VALID_BOUNDARY_SCOPES = ("ALL", "INBOUND", "DEFAULT")
+VALID_INDICATOR_TYPES = ("timeBased", "eventBased")
+VALID_BLUEPRINTS = ("latency", "availability", "traffic", "saturation", "custom")
+VALID_AGGREGATIONS = (
+    "SUM", "MEAN", "MAX", "MIN",
+    "P25", "P50", "P75", "P90", "P95", "P98", "P99", "P99_9", "P99_99",
+    "DISTINCT_COUNT", "SUM_POSITIVE", "PER_SECOND", "INCREASE",
+)
+VALID_TIME_WINDOW_TYPES = ("rolling", "fixed")
+VALID_DURATION_UNITS = ("millisecond", "second", "minute", "hour", "day", "week", "calendar_month")
+
 class SLOConfigurationMCPTools(BaseInstanaClient):
     """Tools for SLO configuration in Instana MCP."""
     def __init__(self, read_token: str, base_url: str):
         """Initialize the SLO Configuration MCP tools client."""
         super().__init__(read_token=read_token, base_url=base_url)
 
-    def _validate_slo_config_payload(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Validate SLO configuration payload and return elicitation if fields are missing.
+    def _build_missing_param(self, name: str, description: str, field_type: str, required: bool = True, **extra: Any) -> Dict[str, Any]:
+        param = {
+            "name": name,
+            "description": description,
+            "type": field_type,
+            "required": required,
+        }
+        param.update(extra)
+        return param
 
-        Args:
-            payload: The SLO configuration payload to validate
-
-        Returns:
-            None if validation passes, elicitation dict if fields are missing
-        """
-        missing_params = []
-
-        # Check top-level required fields
-        if "name" not in payload:
-            missing_params.append({
-                "name": "name",
-                "description": "Name of the SLO configuration",
-                "type": "string",
-                "required": True,
-                "example": "API Response Time SLO"
-            })
-
-        if "tags" not in payload:
-            missing_params.append({
-                "name": "tags",
-                "description": "List of tags for categorizing the SLO",
-                "type": "array of strings",
-                "required": True,
-                "example": ["api", "production", "critical"]
-            })
-
+    def _validate_target(self, payload: Dict[str, Any], missing_params: List[Dict[str, Any]]) -> None:
         if "target" not in payload:
-            missing_params.append({
-                "name": "target",
-                "description": "SLO target value (percentage as decimal between 0.0 and 0.9999)",
-                "type": "float",
-                "required": True,
-                "example": 0.95,
-                "validation": "Must be between 0.0 and 0.9999 (e.g., 0.95 for 95%)"
-            })
+            missing_params.append(self._build_missing_param(
+                "target",
+                "SLO target value (percentage as decimal between 0.0 and 0.9999)",
+                "float",
+                example=0.95,
+                validation="Must be between 0.0 and 0.9999 (e.g., 0.95 for 95%)",
+            ))
+            return
 
-        # Validate entity
+        target = payload["target"]
+        if not isinstance(target, (int, float)) or not (0.0 <= float(target) <= 0.9999):
+            missing_params.append(self._build_missing_param(
+                "target",
+                "SLO target value out of valid range",
+                "float",
+                example=0.95,
+                validation="Must be between 0.0 and 0.9999 (e.g., 0.95 for 95%)",
+                error=f"Invalid target value: {target}",
+            ))
+
+    def _validate_entity(self, payload: Dict[str, Any], missing_params: List[Dict[str, Any]]) -> None:
         if "entity" not in payload:
-            missing_params.append({
-                "name": "entity",
-                "description": "Entity definition (application, service, etc.)",
-                "type": "object",
-                "required": True,
-                "example": {
+            missing_params.append(self._build_missing_param(
+                "entity",
+                "Entity definition (application, service, etc.)",
+                "object",
+                example={
                     "type": "application",
                     "applicationId": "app-123",
-                    "boundaryScope": "ALL"
+                    "boundaryScope": "ALL",
+                    "includeInternal": False,
+                    "includeSynthetic": False,
                 },
-                "nested_fields": {
-                    "type": "Entity type (e.g., 'application')",
+                nested_fields={
+                    "type": "Entity type — currently only 'application' is supported",
                     "applicationId": "Application ID from Instana",
-                    "boundaryScope": "Scope: 'ALL' or 'INBOUND'"
-                }
-            })
-        else:
-            entity = payload["entity"]
-            if isinstance(entity, dict):
-                if "type" not in entity:
-                    missing_params.append({
-                        "name": "entity.type",
-                        "description": "Type of entity for the SLO",
-                        "type": "string",
-                        "required": True,
-                        "example": "application"
-                    })
-                if entity.get("type") == "application":
-                    if "applicationId" not in entity:
-                        missing_params.append({
-                            "name": "entity.applicationId",
-                            "description": "Application ID from Instana",
-                            "type": "string",
-                            "required": True,
-                            "example": "app-abc123"
-                        })
-                    if "boundaryScope" not in entity:
-                        missing_params.append({
-                            "name": "entity.boundaryScope",
-                            "description": "Boundary scope for the application",
-                            "type": "string",
-                            "required": True,
-                            "example": "ALL",
-                            "validation": "Must be 'ALL' or 'INBOUND'"
-                        })
+                    "boundaryScope": f"Scope: one of {VALID_BOUNDARY_SCOPES}",
+                    "includeInternal": "Whether to include internal calls (boolean)",
+                    "includeSynthetic": "Whether to include synthetic calls (boolean)",
+                },
+            ))
+            return
 
-        # Validate indicator
+        entity = payload["entity"]
+        if not isinstance(entity, dict):
+            return
+
+        if "type" not in entity:
+            missing_params.append(self._build_missing_param(
+                "entity.type",
+                "Type of entity for the SLO",
+                "string",
+                example="application",
+                validation="Currently only 'application' is supported",
+            ))
+        if entity.get("type") != "application":
+            return
+
+        if "applicationId" not in entity:
+            missing_params.append(self._build_missing_param(
+                "entity.applicationId",
+                "Application ID from Instana",
+                "string",
+                example="app-abc123",
+            ))
+        if "boundaryScope" not in entity:
+            missing_params.append(self._build_missing_param(
+                "entity.boundaryScope",
+                "Boundary scope for the application",
+                "string",
+                example="ALL",
+                validation=f"Must be one of: {', '.join(VALID_BOUNDARY_SCOPES)}",
+            ))
+        elif entity["boundaryScope"] not in VALID_BOUNDARY_SCOPES:
+            missing_params.append(self._build_missing_param(
+                "entity.boundaryScope",
+                "Invalid boundary scope value",
+                "string",
+                example="ALL",
+                validation=f"Must be one of: {', '.join(VALID_BOUNDARY_SCOPES)}",
+                error=f"Invalid boundaryScope: {entity['boundaryScope']}",
+            ))
+        if "includeInternal" not in entity:
+            missing_params.append(self._build_missing_param(
+                "entity.includeInternal",
+                "Whether the SLO takes internal calls into account",
+                "boolean",
+                example=False,
+                validation="Must be true or false",
+            ))
+        if "includeSynthetic" not in entity:
+            missing_params.append(self._build_missing_param(
+                "entity.includeSynthetic",
+                "Whether the SLO takes synthetic calls into account",
+                "boolean",
+                example=False,
+                validation="Must be true or false",
+            ))
+
+    def _validate_indicator(self, payload: Dict[str, Any], missing_params: List[Dict[str, Any]]) -> None:
         if "indicator" not in payload:
-            missing_params.append({
-                "name": "indicator",
-                "description": "Service level indicator defining what to measure",
-                "type": "object",
-                "required": True,
-                "example": {
+            missing_params.append(self._build_missing_param(
+                "indicator",
+                "Service level indicator defining what to measure",
+                "object",
+                example={
                     "type": "timeBased",
                     "blueprint": "latency",
                     "threshold": 100,
                     "aggregation": "P90"
                 },
-                "nested_fields": {
-                    "type": "'timeBased' or 'eventBased'",
-                    "blueprint": "'latency', 'availability', 'traffic', 'saturation', or 'custom'",
+                nested_fields={
+                    "type": f"One of: {', '.join(VALID_INDICATOR_TYPES)}",
+                    "blueprint": f"One of: {', '.join(VALID_BLUEPRINTS)}",
                     "threshold": "Threshold value (e.g., 100 for 100ms)",
-                    "aggregation": "Aggregation type (e.g., 'P90', 'P95', 'MEAN')"
-                }
-            })
-        else:
-            indicator = payload["indicator"]
-            if isinstance(indicator, dict):
-                if "type" not in indicator:
-                    missing_params.append({
-                        "name": "indicator.type",
-                        "description": "Indicator measurement type",
-                        "type": "string",
-                        "required": True,
-                        "example": "timeBased",
-                        "validation": "Must be 'timeBased' or 'eventBased'"
-                    })
-                if "blueprint" not in indicator:
-                    missing_params.append({
-                        "name": "indicator.blueprint",
-                        "description": "Blueprint type for the indicator",
-                        "type": "string",
-                        "required": True,
-                        "example": "latency",
-                        "validation": "Must be 'latency', 'availability', 'traffic', 'saturation', or 'custom'"
-                    })
+                    "aggregation": f"Optional aggregation type; one of: {', '.join(VALID_AGGREGATIONS)}"
+                },
+            ))
+            return
 
-        # Validate timeWindow
+        indicator = payload["indicator"]
+        if not isinstance(indicator, dict):
+            return
+
+        if "type" not in indicator:
+            missing_params.append(self._build_missing_param(
+                "indicator.type",
+                "Indicator measurement type",
+                "string",
+                example="timeBased",
+                validation=f"Must be one of: {', '.join(VALID_INDICATOR_TYPES)}",
+            ))
+        elif indicator["type"] not in VALID_INDICATOR_TYPES:
+            missing_params.append(self._build_missing_param(
+                "indicator.type",
+                "Invalid indicator type",
+                "string",
+                example="timeBased",
+                validation=f"Must be one of: {', '.join(VALID_INDICATOR_TYPES)}",
+                error=f"Invalid indicator type: {indicator['type']}",
+            ))
+        if "blueprint" not in indicator:
+            missing_params.append(self._build_missing_param(
+                "indicator.blueprint",
+                "Blueprint type for the indicator",
+                "string",
+                example="latency",
+                validation=f"Must be one of: {', '.join(VALID_BLUEPRINTS)}",
+            ))
+        elif indicator["blueprint"] not in VALID_BLUEPRINTS:
+            missing_params.append(self._build_missing_param(
+                "indicator.blueprint",
+                "Invalid indicator blueprint",
+                "string",
+                example="latency",
+                validation=f"Must be one of: {', '.join(VALID_BLUEPRINTS)}",
+                error=f"Invalid blueprint: {indicator['blueprint']}",
+            ))
+        if "aggregation" in indicator and indicator["aggregation"] not in VALID_AGGREGATIONS:
+            missing_params.append(self._build_missing_param(
+                "indicator.aggregation",
+                "Invalid aggregation type",
+                "string",
+                required=False,
+                example="P90",
+                validation=f"Must be one of: {', '.join(VALID_AGGREGATIONS)}",
+                error=f"Invalid aggregation: {indicator['aggregation']}",
+            ))
+
+    def _validate_time_window(self, payload: Dict[str, Any], missing_params: List[Dict[str, Any]]) -> None:
         if "timeWindow" not in payload:
-            missing_params.append({
-                "name": "timeWindow",
-                "description": "Time window for SLO evaluation",
-                "type": "object",
-                "required": True,
-                "example": {
+            missing_params.append(self._build_missing_param(
+                "timeWindow",
+                "Time window for SLO evaluation",
+                "object",
+                example={
                     "type": "rolling",
                     "duration": 1,
                     "durationUnit": "week"
                 },
-                "nested_fields": {
-                    "type": "'rolling' or 'fixed'",
+                nested_fields={
+                    "type": f"One of: {', '.join(VALID_TIME_WINDOW_TYPES)}",
                     "duration": "Duration value (e.g., 1, 7, 30)",
-                    "durationUnit": "'minute', 'hour', 'day', 'week', or 'month'"
-                }
-            })
-        else:
-            time_window = payload["timeWindow"]
-            if isinstance(time_window, dict):
-                if "type" not in time_window:
-                    missing_params.append({
-                        "name": "timeWindow.type",
-                        "description": "Time window type",
-                        "type": "string",
-                        "required": True,
-                        "example": "rolling",
-                        "validation": "Must be 'rolling' or 'fixed'"
-                    })
-                if "duration" not in time_window:
-                    missing_params.append({
-                        "name": "timeWindow.duration",
-                        "description": "Duration value for the time window",
-                        "type": "integer",
-                        "required": True,
-                        "example": 1
-                    })
-                if "durationUnit" not in time_window:
-                    missing_params.append({
-                        "name": "timeWindow.durationUnit",
-                        "description": "Unit for the duration",
-                        "type": "string",
-                        "required": True,
-                        "example": "week",
-                        "validation": "Must be 'minute', 'hour', 'day', 'week', or 'month'"
-                    })
+                    "durationUnit": f"One of: {', '.join(VALID_DURATION_UNITS)}"
+                },
+            ))
+            return
 
-        # If any fields are missing, return elicitation
+        time_window = payload["timeWindow"]
+        if not isinstance(time_window, dict):
+            return
+
+        if "type" not in time_window:
+            missing_params.append(self._build_missing_param(
+                "timeWindow.type",
+                "Time window type",
+                "string",
+                example="rolling",
+                validation=f"Must be one of: {', '.join(VALID_TIME_WINDOW_TYPES)}",
+            ))
+        elif time_window["type"] not in VALID_TIME_WINDOW_TYPES:
+            missing_params.append(self._build_missing_param(
+                "timeWindow.type",
+                "Invalid time window type",
+                "string",
+                example="rolling",
+                validation=f"Must be one of: {', '.join(VALID_TIME_WINDOW_TYPES)}",
+                error=f"Invalid timeWindow type: {time_window['type']}",
+            ))
+        if "duration" not in time_window:
+            missing_params.append(self._build_missing_param(
+                "timeWindow.duration",
+                "Duration value for the time window",
+                "integer",
+                example=1,
+            ))
+        elif not isinstance(time_window["duration"], int) or time_window["duration"] <= 0:
+            missing_params.append(self._build_missing_param(
+                "timeWindow.duration",
+                "Invalid duration value",
+                "integer",
+                example=1,
+                validation="Must be a positive integer",
+                error=f"Invalid duration: {time_window['duration']}",
+            ))
+        if "durationUnit" not in time_window:
+            missing_params.append(self._build_missing_param(
+                "timeWindow.durationUnit",
+                "Unit for the duration",
+                "string",
+                example="week",
+                validation=f"Must be one of: {', '.join(VALID_DURATION_UNITS)}",
+            ))
+        elif time_window["durationUnit"] not in VALID_DURATION_UNITS:
+            missing_params.append(self._build_missing_param(
+                "timeWindow.durationUnit",
+                "Invalid duration unit",
+                "string",
+                example="week",
+                validation=f"Must be one of: {', '.join(VALID_DURATION_UNITS)}",
+                error=f"Invalid durationUnit: {time_window['durationUnit']}",
+            ))
+
+    def _append_message_section(self, message_parts: List[str], title: str, params: List[Dict[str, Any]]) -> None:
+        if not params:
+            return
+        message_parts.append(title)
+        for param in params:
+            example_str = f" (e.g., {param['example']})" if "example" in param else ""
+            validation_str = f" — {param['validation']}" if "validation" in param else ""
+            error_str = f" [current error: {param['error']}]" if "error" in param else ""
+            message_parts.append(f"- {param['name']}: {param['description']}{example_str}{validation_str}{error_str}")
+
+    def _build_slo_config_elicitation(self, missing_params: List[Dict[str, Any]]) -> Dict[str, Any]:
+        message_parts = ["To create an SLO configuration, I need the following information:\n"]
+        self._append_message_section(message_parts, "\n**Top-level fields:**", [p for p in missing_params if "." not in p["name"]])
+        self._append_message_section(message_parts, "\n**Entity fields:**", [p for p in missing_params if p["name"].startswith("entity.")])
+        self._append_message_section(message_parts, "\n**Indicator fields:**", [p for p in missing_params if p["name"].startswith("indicator.")])
+        self._append_message_section(message_parts, "\n**Time window fields:**", [p for p in missing_params if p["name"].startswith("timeWindow.")])
+        return {
+            "elicitation_needed": True,
+            "message": "\n".join(message_parts),
+            "missing_parameters": [p["name"] for p in missing_params],
+            "parameter_details": missing_params,
+            "user_prompt": "Please provide all the required fields to create the SLO configuration."
+        }
+
+    def _validate_slo_config_payload(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Validate SLO configuration payload and return elicitation if fields are missing or invalid.
+
+        Validates all required fields and their allowed values before the API is called so that
+        a single consolidated response is returned to the LLM for correction instead of relying
+        on the API to reject individual bad values one at a time.
+
+        Args:
+            payload: The SLO configuration payload to validate
+
+        Returns:
+            None if validation passes, elicitation dict if fields are missing or invalid
+        """
+        missing_params = []
+
+        if "name" not in payload:
+            missing_params.append(self._build_missing_param(
+                "name",
+                "Name of the SLO configuration",
+                "string",
+                example="API Response Time SLO",
+            ))
+        if "tags" not in payload:
+            missing_params.append(self._build_missing_param(
+                "tags",
+                "List of tags for categorizing the SLO",
+                "array of strings",
+                example=["api", "production", "critical"],
+            ))
+
+        self._validate_target(payload, missing_params)
+        self._validate_entity(payload, missing_params)
+        self._validate_indicator(payload, missing_params)
+        self._validate_time_window(payload, missing_params)
+
         if missing_params:
-            # Group parameters by category
-            top_level = [p for p in missing_params if "." not in p["name"]]
-            entity_fields = [p for p in missing_params if p["name"].startswith("entity.")]
-            indicator_fields = [p for p in missing_params if p["name"].startswith("indicator.")]
-            time_window_fields = [p for p in missing_params if p["name"].startswith("timeWindow.")]
-
-            message_parts = ["To create an SLO configuration, I need the following information:\n"]
-
-            if top_level:
-                message_parts.append("\n**Top-level fields:**")
-                for param in top_level:
-                    example_str = f" (e.g., {param['example']})" if "example" in param else ""
-                    message_parts.append(f"- {param['name']}: {param['description']}{example_str}")
-
-            if entity_fields:
-                message_parts.append("\n**Entity fields:**")
-                for param in entity_fields:
-                    example_str = f" (e.g., {param['example']})" if "example" in param else ""
-                    message_parts.append(f"- {param['name']}: {param['description']}{example_str}")
-
-            if indicator_fields:
-                message_parts.append("\n**Indicator fields:**")
-                for param in indicator_fields:
-                    example_str = f" (e.g., {param['example']})" if "example" in param else ""
-                    message_parts.append(f"- {param['name']}: {param['description']}{example_str}")
-
-            if time_window_fields:
-                message_parts.append("\n**Time window fields:**")
-                for param in time_window_fields:
-                    example_str = f" (e.g., {param['example']})" if "example" in param else ""
-                    message_parts.append(f"- {param['name']}: {param['description']}{example_str}")
-
-            return {
-                "elicitation_needed": True,
-                "message": "\n".join(message_parts),
-                "missing_parameters": [p["name"] for p in missing_params],
-                "parameter_details": missing_params,
-                "user_prompt": "Please provide all the required fields to create the SLO configuration."
-            }
+            return self._build_slo_config_elicitation(missing_params)
 
         return None
 
@@ -468,7 +577,6 @@ class SLOConfigurationMCPTools(BaseInstanaClient):
                         logger.debug("Successfully parsed fixed JSON")
                         request_body = parsed_payload
                     except json.JSONDecodeError:
-                        import ast
                         try:
                             parsed_payload = ast.literal_eval(payload)
                             logger.debug("Successfully parsed payload as Python literal")
@@ -647,7 +755,6 @@ class SLOConfigurationMCPTools(BaseInstanaClient):
                             logger.debug("Successfully parsed fixed JSON")
                             request_body = parsed_payload
                         except json.JSONDecodeError:
-                            import ast
                             try:
                                 parsed_payload = ast.literal_eval(payload)
                                 logger.debug("Successfully parsed payload as Python literal")

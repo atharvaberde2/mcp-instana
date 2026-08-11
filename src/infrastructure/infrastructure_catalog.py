@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 # Error message constants
 ERROR_PLUGIN_REQUIRED = "plugin parameter is required"
+_HINT_GET_PLUGINS = "First call get_plugins to discover available plugin IDs"
+_MSG_PLUGIN_MISSING = "Missing required parameter 'plugin'. Call get_plugins first to discover valid plugin IDs."
 
 class InfrastructureCatalogMCPTools(BaseInstanaClient):
     """Tools for infrastructure catalog in Instana MCP."""
@@ -214,7 +216,18 @@ class InfrastructureCatalogMCPTools(BaseInstanaClient):
             logger.debug(f"get_infrastructure_catalog_metrics called with plugin={plugin}, filter={filter}")
 
             if not plugin:
-                return {"error": ERROR_PLUGIN_REQUIRED}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "plugin",
+                            "issue": "plugin is required to get infrastructure catalog metrics",
+                            "hint": _HINT_GET_PLUGINS
+                        }
+                    ],
+                    "message": _MSG_PLUGIN_MISSING
+                }
 
             # Call the get_infrastructure_catalog_metrics method from the SDK
             response = api_client.get_infrastructure_catalog_metrics_without_preload_content(
@@ -442,7 +455,18 @@ class InfrastructureCatalogMCPTools(BaseInstanaClient):
             logger.debug(f"get_tag_catalog called with plugin={plugin}")
 
             if not plugin:
-                return {"error": ERROR_PLUGIN_REQUIRED}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "plugin",
+                            "issue": "plugin is required to get tag catalog",
+                            "hint": _HINT_GET_PLUGINS
+                        }
+                    ],
+                    "message": _MSG_PLUGIN_MISSING
+                }
 
             # Try calling the SDK method first
             try:
@@ -577,7 +601,18 @@ class InfrastructureCatalogMCPTools(BaseInstanaClient):
             logger.debug(f"get_plugin_schema called with plugin={plugin}, filter={filter}")
 
             if not plugin:
-                return {"error": ERROR_PLUGIN_REQUIRED}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "plugin",
+                            "issue": "plugin is required to get plugin schema",
+                            "hint": _HINT_GET_PLUGINS
+                        }
+                    ],
+                    "message": _MSG_PLUGIN_MISSING
+                }
 
             result = {
                 "plugin": plugin,

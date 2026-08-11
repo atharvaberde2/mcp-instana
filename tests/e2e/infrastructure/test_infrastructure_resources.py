@@ -68,7 +68,7 @@ class TestInfrastructureResourcesE2E:
         result = await client.get_monitoring_state(api_client=mock_api_client)
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get monitoring state" in result["error"]
 
     # ==================== GET_PLUGIN_PAYLOAD TESTS ====================
@@ -139,7 +139,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get plugin payload" in result["error"]
 
     # ==================== GET_SNAPSHOT TESTS ====================
@@ -186,8 +186,8 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
-        assert "snapshot_id parameter is required" in result["error"]
+        assert "error" in result or result.get("elicitation_needed")
+        assert "snapshot_id" in (result.get("error") or result.get("message", ""))
 
     @pytest.mark.asyncio
     async def test_get_snapshot_error(self, instana_credentials):
@@ -207,7 +207,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get snapshot" in result["error"]
 
     # ==================== GET_SNAPSHOTS TESTS ====================
@@ -278,7 +278,7 @@ class TestInfrastructureResourcesE2E:
         result = await client.get_snapshots(api_client=mock_api_client)
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get snapshots" in result["error"]
 
     # ==================== POST_SNAPSHOTS TESTS ====================
@@ -353,7 +353,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         # The actual implementation doesn't check for empty IDs, so we expect an API error
         assert "SDK returned status" in result["error"]
 
@@ -378,7 +378,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "SDK returned status 500" in result["error"]
 
     # ==================== SOFTWARE_VERSIONS TESTS ====================
@@ -441,7 +441,7 @@ class TestInfrastructureResourcesE2E:
         result = await client.software_versions(api_client=mock_api_client)
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get software versions" in result["error"]
 
     # ==================== HELPER METHOD TESTS ====================
@@ -733,7 +733,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "HTTP 404" in result["error"]
 
     @pytest.mark.asyncio
@@ -782,7 +782,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get snapshot" in result["error"]
 
     @pytest.mark.asyncio
@@ -853,7 +853,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "snapshot_ids parameter is required" in result["error"]
 
     @pytest.mark.asyncio
@@ -872,7 +872,7 @@ class TestInfrastructureResourcesE2E:
             )
 
             assert isinstance(result, dict)
-            assert "error" in result
+            assert "error" in result or result.get("elicitation_needed")
             assert "GetSnapshotsQuery model not available" in result["error"]
 
     @pytest.mark.asyncio
@@ -1153,7 +1153,7 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to post snapshots" in result["error"]
 
     @pytest.mark.asyncio
@@ -1171,7 +1171,7 @@ class TestInfrastructureResourcesE2E:
         result = await client.software_versions(api_client=mock_api_client)
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get software versions" in result["error"]
 
     @pytest.mark.asyncio
@@ -1192,5 +1192,5 @@ class TestInfrastructureResourcesE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get snapshot" in result["error"]

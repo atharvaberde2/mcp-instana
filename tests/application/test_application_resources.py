@@ -582,6 +582,64 @@ class TestApplicationResourcesMCPTools(unittest.TestCase):
         self.assertIn("Get applications failed", result["error"])
 
 
+    # ------------------------------------------------------------------
+    # Tests for application_boundary_scope validation
+    # ------------------------------------------------------------------
+
+    def test_execute_resources_operation_invalid_boundary_scope_returns_elicitation(self):
+        """execute_resources_operation with invalid boundary_scope returns elicitation"""
+        result = asyncio.run(self.client.execute_resources_operation(
+            operation="get_applications",
+            application_boundary_scope="INVALID_SCOPE"
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("api_error", result)
+        self.assertTrue(any("application_boundary_scope" in e for e in result["api_error"]))
+
+    def test_execute_resources_operation_valid_all_boundary_scope(self):
+        """execute_resources_operation with ALL boundary_scope passes validation"""
+        mock_response = MagicMock()
+        mock_response.to_dict.return_value = {"items": []}
+        self.resources_api.get_applications.return_value = mock_response
+        result = asyncio.run(self.client.execute_resources_operation(
+            operation="get_applications",
+            application_boundary_scope="ALL"
+        ))
+        # Should NOT return elicitation — validation passes and proceeds to API
+        self.assertFalse(result.get("elicitation_needed", False))
+
+    def test_execute_resources_operation_valid_inbound_boundary_scope(self):
+        """execute_resources_operation with INBOUND boundary_scope passes validation"""
+        mock_response = MagicMock()
+        mock_response.to_dict.return_value = {"items": []}
+        self.resources_api.get_applications.return_value = mock_response
+        result = asyncio.run(self.client.execute_resources_operation(
+            operation="get_applications",
+            application_boundary_scope="INBOUND"
+        ))
+        self.assertFalse(result.get("elicitation_needed", False))
+
+    def test_execute_resources_operation_none_boundary_scope_passes(self):
+        """None boundary_scope is allowed (optional parameter)"""
+        mock_response = MagicMock()
+        mock_response.to_dict.return_value = {"items": []}
+        self.resources_api.get_applications.return_value = mock_response
+        result = asyncio.run(self.client.execute_resources_operation(
+            operation="get_applications",
+            application_boundary_scope=None
+        ))
+        self.assertFalse(result.get("elicitation_needed", False))
+
+    def test_execute_resources_operation_invalid_scope_on_services(self):
+        """Invalid boundary_scope on get_services still returns elicitation"""
+        result = asyncio.run(self.client.execute_resources_operation(
+            operation="get_application_services",
+            application_boundary_scope="OUTBOUND"
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("OUTBOUND" in e for e in result["api_error"]))
+
+
 if __name__ == '__main__':
     unittest.main()
 

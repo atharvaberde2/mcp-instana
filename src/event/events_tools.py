@@ -5,6 +5,7 @@ Agent Monitoring Events MCP Tools Module
 This module provides agent monitoring events-specific MCP tools for Instana monitoring.
 """
 
+import ast
 import json
 import logging
 import re
@@ -581,7 +582,18 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
             logger.debug(f"get_event called with event_id={event_id}")
 
             if not event_id:
-                return {"error": "event_id parameter is required"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "get_event: event_id is required",
+                    "api_error": [
+                        "event_id: required — provide the event ID string "
+                        "(obtain one from get_events or get_events_by_ids)"
+                    ],
+                    "message": (
+                        "event_id is required for 'get_event'. "
+                        "Obtain one from the 'get_events' operation first."
+                    ),
+                }
 
             # Use the raw response path directly to avoid Pydantic model
             # validation errors in the SDK's ServiceEventResult model, which
@@ -978,7 +990,9 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
 
             extracted = self._extract_event_filters(filters)
 
-            self._validate_event_type_filters(extracted["event_type_filters"])
+            etf_error = self._validate_event_type_filters(extracted["event_type_filters"])
+            if etf_error:
+                return etf_error
 
             time_params = self._build_time_params(
                 extracted["time_range"],
@@ -1032,21 +1046,50 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
         return {k: filters.get(k, v) for k, v in ALLOWED_FILTERS.items()}
 
     def _validate_event_type_filters(self, event_type_filters):
+        """
+        Validate event_type_filters and return an elicitation dict if invalid,
+        or None if valid/absent.
+
+        Replaces the previous raise-based approach so errors reach the LLM
+        as structured elicitation responses instead of being swallowed by the
+        outer exception handler as plain {"error": "Failed to get events: ..."}.
+        """
         if not event_type_filters:
-            return
+            return None
+
+        errors: list = []
 
         if not isinstance(event_type_filters, list):
-            raise TypeError("event_type_filters must be a list")
+            errors.append(
+                "event_type_filters: must be a list. "
+                'Example: ["INCIDENT", "ISSUE", "CHANGE"]'
+            )
+        else:
+            for i, event_type in enumerate(event_type_filters):
+                if not isinstance(event_type, str):
+                    errors.append(
+                        f"event_type_filters[{i}]: must be a string, "
+                        f"got {type(event_type).__name__!r}"
+                    )
+                elif event_type.upper() not in VALID_EVENT_TYPES:
+                    errors.append(
+                        f"event_type_filters[{i}]: {event_type!r} is not valid. "
+                        f"Must be one of: {sorted(VALID_EVENT_TYPES)}"
+                    )
 
-        for event_type in event_type_filters:
-            if not isinstance(event_type, str):
-                raise TypeError("Each event type must be a string")
+        if not errors:
+            return None
 
-            if event_type.upper() not in VALID_EVENT_TYPES:
-                raise ValueError(
-                    f"Invalid event_type '{event_type}'. Must be one of: "
-                    f"{', '.join(sorted(VALID_EVENT_TYPES))}"
-                )
+        return {
+            "elicitation_needed": True,
+            "reason": f"event_type_filters has {len(errors)} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"event_type_filters has {len(errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
 
     async def _fetch_events_api(
         self,
@@ -1200,7 +1243,6 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
             # Handle string input conversion
             if isinstance(event_ids, str):
                 if event_ids.startswith('[') and event_ids.endswith(']'):
-                    import ast
                     try:
                         event_ids = ast.literal_eval(event_ids)
                     except (SyntaxError, ValueError) as e:
@@ -1211,7 +1253,18 @@ class AgentMonitoringEventsMCPTools(BaseInstanaClient):
 
             # Validate input
             if not event_ids:
-                return {"error": "No event IDs provided"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "get_events_by_ids: event_ids is required",
+                    "api_error": [
+                        "event_ids: required — provide a non-empty list of event ID strings. "
+                        'Example: ["1a2b3c4d5e6f", "7g8h9i0j1k2l"]'
+                    ],
+                    "message": (
+                        "event_ids is required and must be a non-empty list. "
+                        'Example: {"event_ids": ["1a2b3c4d5e6f", "7g8h9i0j1k2l"]}'
+                    ),
+                }
 
             logger.debug(f"Processing {len(event_ids)} event IDs")
 

@@ -212,7 +212,8 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         for attr_name in dir(mock_settings_api):
             attr = getattr(mock_settings_api, attr_name)
             if callable(attr) and not attr_name.startswith('_'):
-                if hasattr(attr, 'side_effect'):
+                import contextlib
+                with contextlib.suppress(AttributeError):
                     attr.side_effect = None
 
         self.mock_configuration = mock_configuration
@@ -415,11 +416,10 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
 
     # Tests for application config operations
     def test_add_application_config_no_payload(self):
-        """Test _add_application_config with no payload"""
+        """Test _add_application_config with no payload returns elicitation"""
         result = asyncio.run(self.client._add_application_config(None))
-
-        self.assertIn("error", result)
-        self.assertIn("payload is required", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("payload" in e for e in result["api_error"]))
 
     def test_add_application_config_success(self):
         """Test _add_application_config with valid payload"""
@@ -464,10 +464,9 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertEqual(result["id"], "app1")
 
     def test_update_application_config_no_id_or_payload(self):
-        """Test _update_application_config with missing parameters"""
+        """Test _update_application_config with missing id/payload returns elicitation"""
         result = asyncio.run(self.client._update_application_config(None, None))
-
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"))
 
     def test_update_application_config_success(self):
         """Test _update_application_config with valid parameters"""
@@ -513,10 +512,9 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertIn("error", result)
 
     def test_create_endpoint_config_no_payload(self):
-        """Test _create_endpoint_config with no payload"""
+        """Test _create_endpoint_config with no payload returns elicitation"""
         result = asyncio.run(self.client._create_endpoint_config(None))
-
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"))
 
     def test_create_endpoint_config_success(self):
         """Test _create_endpoint_config with valid payload"""
@@ -524,7 +522,7 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         mock_result.to_dict.return_value = {"id": "ep1"}
         mock_settings_api.create_endpoint_config.return_value = mock_result
 
-        payload = {"label": "Test Endpoint"}
+        payload = {"endpointCase": "ORIGINAL", "serviceId": "svc1"}
         result = asyncio.run(self.client._create_endpoint_config(payload))
 
         self.assertIn("id", result)
@@ -535,7 +533,7 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         mock_result.to_dict.return_value = {"id": "ep1"}
         mock_settings_api.update_endpoint_config.return_value = mock_result
 
-        payload = {"label": "Updated Endpoint"}
+        payload = {"endpointCase": "LOWER", "serviceId": "svc1"}
         result = asyncio.run(self.client._update_endpoint_config("ep1", payload))
 
         self.assertIn("id", result)
@@ -566,10 +564,9 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertIn("error", result)
 
     def test_add_service_config_no_payload(self):
-        """Test _add_service_config with no payload"""
+        """Test _add_service_config with no payload returns elicitation"""
         result = asyncio.run(self.client._add_service_config(None))
-
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"))
 
     def test_add_service_config_success(self):
         """Test _add_service_config with valid payload"""
@@ -577,7 +574,10 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         mock_result.to_dict.return_value = {"id": "svc1"}
         mock_settings_api.add_service_config.return_value = mock_result
 
-        payload = {"label": "Test Service"}
+        payload = {
+            "label": "Test Service", "name": "test-svc",
+            "enabled": True, "matchSpecification": {"type": "TAG"}
+        }
         result = asyncio.run(self.client._add_service_config(payload))
 
         self.assertIn("id", result)
@@ -588,7 +588,10 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         mock_result.to_dict.return_value = {"id": "svc1"}
         mock_settings_api.update_service_config.return_value = mock_result
 
-        payload = {"label": "Updated Service"}
+        payload = {
+            "label": "Updated Service", "name": "updated-svc",
+            "enabled": True, "matchSpecification": {"type": "TAG"}
+        }
         result = asyncio.run(self.client._update_service_config("svc1", payload))
 
         self.assertIn("id", result)
@@ -613,10 +616,9 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertIsInstance(result, list)
 
     def test_add_manual_service_config_no_payload(self):
-        """Test _add_manual_service_config with no payload"""
+        """Test _add_manual_service_config with no payload returns elicitation"""
         result = asyncio.run(self.client._add_manual_service_config(None))
-
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"))
 
     def test_add_manual_service_config_success(self):
         """Test _add_manual_service_config with valid payload"""
@@ -624,7 +626,9 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         mock_result.to_dict.return_value = {"id": "ms1"}
         mock_settings_api.add_manual_service_config.return_value = mock_result
 
-        payload = {"label": "Manual Service"}
+        payload = {"tagFilterExpression": {"type": "TAG_FILTER", "name": "service.name",
+                                           "operator": "EQUALS", "entity": "NOT_APPLICABLE",
+                                           "value": "my-svc"}}
         result = asyncio.run(self.client._add_manual_service_config(payload))
 
         self.assertIn("id", result)
@@ -635,7 +639,9 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         mock_result.to_dict.return_value = {"id": "ms1"}
         mock_settings_api.update_manual_service_config.return_value = mock_result
 
-        payload = {"label": "Updated Manual Service"}
+        payload = {"tagFilterExpression": {"type": "TAG_FILTER", "name": "service.name",
+                                           "operator": "EQUALS", "entity": "NOT_APPLICABLE",
+                                           "value": "my-svc"}}
         result = asyncio.run(self.client._update_manual_service_config("ms1", payload))
 
         self.assertIn("id", result)
@@ -921,11 +927,10 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertEqual(result, mock_result)
 
     def test_add_application_config_validation_error(self):
-        """Test _add_application_config with validation error"""
+        """Test _add_application_config without label returns elicitation"""
         result = asyncio.run(self.client._add_application_config({"invalid": "data"}))
-
-        self.assertIn("error", result)
-        self.assertIn("missing_fields", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("label" in e for e in result["api_error"]))
 
     def test_add_application_config_no_to_dict(self):
         """Test _add_application_config when result doesn't have to_dict"""
@@ -1064,59 +1069,59 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertEqual(result, mock_result)
 
     def test_create_endpoint_config_with_ast_literal_eval(self):
-        """Test _create_endpoint_config with Python dict string"""
+        """Test _create_endpoint_config with Python dict string (valid payload)"""
         mock_result = MagicMock()
         mock_result.to_dict.return_value = {"id": "ep1"}
         mock_settings_api.create_endpoint_config.return_value = mock_result
 
-        payload = "{'label': 'Endpoint'}"
+        payload = "{'endpointCase': 'UPPER', 'serviceId': 'svc1'}"
         result = asyncio.run(self.client._create_endpoint_config(payload))
 
         self.assertIn("id", result)
 
     def test_create_endpoint_config_no_to_dict(self):
-        """Test _create_endpoint_config when result doesn't have to_dict"""
+        """Test _create_endpoint_config when result doesn't have to_dict (valid payload)"""
         mock_settings_api.create_endpoint_config.return_value = None
 
-        payload = {"label": "Endpoint"}
+        payload = {"endpointCase": "ORIGINAL", "serviceId": "svc1"}
         result = asyncio.run(self.client._create_endpoint_config(payload))
 
         self.assertIn("success", result)
 
     def test_create_endpoint_config_exception(self):
-        """Test _create_endpoint_config handles exceptions"""
+        """Test _create_endpoint_config handles exceptions (valid payload)"""
         mock_settings_api.create_endpoint_config.side_effect = Exception("API Error")
 
-        payload = {"label": "Endpoint"}
+        payload = {"endpointCase": "ORIGINAL", "serviceId": "svc1"}
         result = asyncio.run(self.client._create_endpoint_config(payload))
 
         self.assertIn("error", result)
 
     def test_update_endpoint_config_with_ast_literal_eval(self):
-        """Test _update_endpoint_config with Python dict string"""
+        """Test _update_endpoint_config with Python dict string (valid payload)"""
         mock_result = MagicMock()
         mock_result.to_dict.return_value = {"id": "ep1"}
         mock_settings_api.update_endpoint_config.return_value = mock_result
 
-        payload = "{'label': 'Updated'}"
+        payload = "{'endpointCase': 'LOWER', 'serviceId': 'svc1'}"
         result = asyncio.run(self.client._update_endpoint_config("ep1", payload))
 
         self.assertIn("id", result)
 
     def test_update_endpoint_config_no_to_dict(self):
-        """Test _update_endpoint_config when result doesn't have to_dict"""
+        """Test _update_endpoint_config when result doesn't have to_dict (valid payload)"""
         mock_settings_api.update_endpoint_config.return_value = None
 
-        payload = {"label": "Updated"}
+        payload = {"endpointCase": "UPPER", "serviceId": "svc1"}
         result = asyncio.run(self.client._update_endpoint_config("ep1", payload))
 
         self.assertIn("success", result)
 
     def test_update_endpoint_config_exception(self):
-        """Test _update_endpoint_config handles exceptions"""
+        """Test _update_endpoint_config handles exceptions (valid payload)"""
         mock_settings_api.update_endpoint_config.side_effect = Exception("API Error")
 
-        payload = {"label": "Updated"}
+        payload = {"endpointCase": "ORIGINAL", "serviceId": "svc1"}
         result = asyncio.run(self.client._update_endpoint_config("ep1", payload))
 
         self.assertIn("error", result)
@@ -1156,59 +1161,59 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertEqual(result, mock_result)
 
     def test_add_service_config_with_ast_literal_eval(self):
-        """Test _add_service_config with Python dict string"""
+        """Test _add_service_config with Python dict string (valid payload)"""
         mock_result = MagicMock()
         mock_result.to_dict.return_value = {"id": "svc1"}
         mock_settings_api.add_service_config.return_value = mock_result
 
-        payload = "{'label': 'Service'}"
+        payload = "{'label': 'Service', 'name': 'svc', 'enabled': True, 'matchSpecification': {}}"
         result = asyncio.run(self.client._add_service_config(payload))
 
         self.assertIn("id", result)
 
     def test_add_service_config_no_to_dict(self):
-        """Test _add_service_config when result doesn't have to_dict"""
+        """Test _add_service_config when result doesn't have to_dict (valid payload)"""
         mock_settings_api.add_service_config.return_value = None
 
-        payload = {"label": "Service"}
+        payload = {"label": "Service", "name": "svc", "enabled": True, "matchSpecification": {}}
         result = asyncio.run(self.client._add_service_config(payload))
 
         self.assertIn("success", result)
 
     def test_add_service_config_exception(self):
-        """Test _add_service_config handles exceptions"""
+        """Test _add_service_config handles exceptions (valid payload)"""
         mock_settings_api.add_service_config.side_effect = Exception("API Error")
 
-        payload = {"label": "Service"}
+        payload = {"label": "Service", "name": "svc", "enabled": True, "matchSpecification": {}}
         result = asyncio.run(self.client._add_service_config(payload))
 
         self.assertIn("error", result)
 
     def test_update_service_config_with_ast_literal_eval(self):
-        """Test _update_service_config with Python dict string"""
+        """Test _update_service_config with Python dict string (valid payload)"""
         mock_result = MagicMock()
         mock_result.to_dict.return_value = {"id": "svc1"}
         mock_settings_api.update_service_config.return_value = mock_result
 
-        payload = "{'label': 'Updated'}"
+        payload = "{'label': 'Updated', 'name': 'svc', 'enabled': True, 'matchSpecification': {}}"
         result = asyncio.run(self.client._update_service_config("svc1", payload))
 
         self.assertIn("id", result)
 
     def test_update_service_config_no_to_dict(self):
-        """Test _update_service_config when result doesn't have to_dict"""
+        """Test _update_service_config when result doesn't have to_dict (valid payload)"""
         mock_settings_api.update_service_config.return_value = None
 
-        payload = {"label": "Updated"}
+        payload = {"label": "Updated", "name": "svc", "enabled": True, "matchSpecification": {}}
         result = asyncio.run(self.client._update_service_config("svc1", payload))
 
         self.assertIn("success", result)
 
     def test_update_service_config_exception(self):
-        """Test _update_service_config handles exceptions"""
+        """Test _update_service_config handles exceptions (valid payload)"""
         mock_settings_api.update_service_config.side_effect = Exception("API Error")
 
-        payload = {"label": "Updated"}
+        payload = {"label": "Updated", "name": "svc", "enabled": True, "matchSpecification": {}}
         result = asyncio.run(self.client._update_service_config("svc1", payload))
 
         self.assertIn("error", result)
@@ -1231,59 +1236,67 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         self.assertIn("error", result[0])
 
     def test_add_manual_service_config_with_ast_literal_eval(self):
-        """Test _add_manual_service_config with Python dict string"""
+        """Test _add_manual_service_config with Python dict string (valid payload)"""
         mock_result = MagicMock()
         mock_result.to_dict.return_value = {"id": "ms1"}
         mock_settings_api.add_manual_service_config.return_value = mock_result
 
-        payload = "{'label': 'Manual Service'}"
+        payload = "{'tagFilterExpression': {'type': 'TAG_FILTER', 'name': 'service.name', 'operator': 'EQUALS', 'entity': 'NOT_APPLICABLE', 'value': 'svc'}}"
         result = asyncio.run(self.client._add_manual_service_config(payload))
 
         self.assertIn("id", result)
 
     def test_add_manual_service_config_no_to_dict(self):
-        """Test _add_manual_service_config when result doesn't have to_dict"""
+        """Test _add_manual_service_config when result doesn't have to_dict (valid payload)"""
         mock_settings_api.add_manual_service_config.return_value = None
 
-        payload = {"label": "Manual Service"}
+        payload = {"tagFilterExpression": {"type": "TAG_FILTER", "name": "service.name",
+                                           "operator": "EQUALS", "entity": "NOT_APPLICABLE",
+                                           "value": "svc"}}
         result = asyncio.run(self.client._add_manual_service_config(payload))
 
         self.assertIn("success", result)
 
     def test_add_manual_service_config_exception(self):
-        """Test _add_manual_service_config handles exceptions"""
+        """Test _add_manual_service_config handles exceptions (valid payload)"""
         mock_settings_api.add_manual_service_config.side_effect = Exception("API Error")
 
-        payload = {"label": "Manual Service"}
+        payload = {"tagFilterExpression": {"type": "TAG_FILTER", "name": "service.name",
+                                           "operator": "EQUALS", "entity": "NOT_APPLICABLE",
+                                           "value": "svc"}}
         result = asyncio.run(self.client._add_manual_service_config(payload))
 
         self.assertIn("error", result)
 
     def test_update_manual_service_config_with_ast_literal_eval(self):
-        """Test _update_manual_service_config with Python dict string"""
+        """Test _update_manual_service_config with Python dict string (valid payload)"""
         mock_result = MagicMock()
         mock_result.to_dict.return_value = {"id": "ms1"}
         mock_settings_api.update_manual_service_config.return_value = mock_result
 
-        payload = "{'label': 'Updated'}"
+        payload = "{'tagFilterExpression': {'type': 'TAG_FILTER', 'name': 'service.name', 'operator': 'EQUALS', 'entity': 'NOT_APPLICABLE', 'value': 'svc'}}"
         result = asyncio.run(self.client._update_manual_service_config("ms1", payload))
 
         self.assertIn("id", result)
 
     def test_update_manual_service_config_no_to_dict(self):
-        """Test _update_manual_service_config when result doesn't have to_dict"""
+        """Test _update_manual_service_config when result doesn't have to_dict (valid payload)"""
         mock_settings_api.update_manual_service_config.return_value = None
 
-        payload = {"label": "Updated"}
+        payload = {"tagFilterExpression": {"type": "TAG_FILTER", "name": "service.name",
+                                           "operator": "EQUALS", "entity": "NOT_APPLICABLE",
+                                           "value": "svc"}}
         result = asyncio.run(self.client._update_manual_service_config("ms1", payload))
 
         self.assertIn("success", result)
 
     def test_update_manual_service_config_exception(self):
-        """Test _update_manual_service_config handles exceptions"""
+        """Test _update_manual_service_config handles exceptions (valid payload)"""
         mock_settings_api.update_manual_service_config.side_effect = Exception("API Error")
 
-        payload = {"label": "Updated"}
+        payload = {"tagFilterExpression": {"type": "TAG_FILTER", "name": "service.name",
+                                           "operator": "EQUALS", "entity": "NOT_APPLICABLE",
+                                           "value": "svc"}}
         result = asyncio.run(self.client._update_manual_service_config("ms1", payload))
 
         self.assertIn("error", result)
@@ -1329,6 +1342,302 @@ class TestApplicationSettingsMCPTools(unittest.TestCase):
         # not a plain dict — just confirm it is present and not an error.
         self.assertIn("tagFilterExpression", result["payload"])
         self.assertNotIn("error", result)
+
+
+    # ------------------------------------------------------------------
+    # Tests for _validate_settings_payload (new pre-flight validator)
+    # ------------------------------------------------------------------
+
+    def test_validate_settings_payload_application_create_missing_label(self):
+        """create application without label returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "create", {"scope": "INCLUDE_ALL_DOWNSTREAM"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+        self.assertTrue(any("label" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_application_create_invalid_scope(self):
+        """create application with invalid scope returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "create", {"label": "MyApp", "scope": "BAD_SCOPE"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+        self.assertTrue(any("scope" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_application_create_invalid_boundary_scope(self):
+        """create application with invalid boundaryScope returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "create",
+            {"label": "MyApp", "boundaryScope": "UNKNOWN"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("boundaryScope" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_application_create_access_rules_not_list(self):
+        """create application with non-list accessRules returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "create",
+            {"label": "MyApp", "accessRules": "READ_WRITE"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("accessRules" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_application_create_valid(self):
+        """create application with valid payload returns None"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "create",
+            {"label": "MyApp", "scope": "INCLUDE_ALL_DOWNSTREAM", "boundaryScope": "ALL"}
+        )
+        self.assertIsNone(result)
+
+    def test_validate_settings_payload_application_update_missing_id(self):
+        """update application without id returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "update",
+            {"label": "MyApp"}, id=None
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("'id'" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_application_update_valid(self):
+        """update application with id and valid payload returns None"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "update",
+            {"label": "MyApp"}, id="abc-123"
+        )
+        self.assertIsNone(result)
+
+    def test_validate_settings_payload_missing_payload(self):
+        """None payload for any subtype triggers early return with elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "application", "create", None
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+        self.assertTrue(any("payload" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_endpoint_create_missing_endpoint_case(self):
+        """create endpoint without endpointCase returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "endpoint", "create", {"serviceId": "svc1"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("endpointCase" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_endpoint_create_invalid_endpoint_case(self):
+        """create endpoint with invalid endpointCase returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "endpoint", "create", {"serviceId": "svc1", "endpointCase": "MIXED"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("MIXED" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_endpoint_create_missing_service_id(self):
+        """create endpoint without serviceId returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "endpoint", "create", {"endpointCase": "ORIGINAL"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("serviceId" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_endpoint_create_valid(self):
+        """create endpoint with valid payload returns None"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "endpoint", "create", {"endpointCase": "UPPER", "serviceId": "svc-1"}
+        )
+        self.assertIsNone(result)
+
+    def test_validate_settings_payload_endpoint_create_multiple_errors(self):
+        """create endpoint with both errors consolidates them in one response"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "endpoint", "create", {}
+        )
+        self.assertIsNotNone(result)
+        # Both endpointCase and serviceId errors present
+        all_errors = " ".join(result["api_error"])
+        self.assertIn("endpointCase", all_errors)
+        self.assertIn("serviceId", all_errors)
+        self.assertEqual(len(result["api_error"]), 2)
+
+    def test_validate_settings_payload_service_create_missing_all_required(self):
+        """create service with empty payload consolidates all errors"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "service", "create", {}
+        )
+        self.assertIsNotNone(result)
+        all_errors = " ".join(result["api_error"])
+        self.assertIn("label", all_errors)
+        self.assertIn("name", all_errors)
+        self.assertIn("enabled", all_errors)
+        self.assertIn("matchSpecification", all_errors)
+
+    def test_validate_settings_payload_service_create_enabled_not_bool(self):
+        """create service with enabled='yes' returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "service", "create",
+            {"label": "svc", "name": "svc", "enabled": "yes", "matchSpecification": {}}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("boolean" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_service_create_valid(self):
+        """create service with all required fields returns None"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "service", "create",
+            {"label": "My Svc", "name": "my-svc", "enabled": True, "matchSpecification": {"type": "EQUALS"}}
+        )
+        self.assertIsNone(result)
+
+    def test_validate_settings_payload_manual_service_create_missing_tag_filter(self):
+        """create manual service without tagFilterExpression returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "manual_service", "create", {}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("tagFilterExpression" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_manual_service_create_tag_filter_not_dict(self):
+        """create manual service with non-dict tagFilterExpression returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "manual_service", "create",
+            {"tagFilterExpression": "not-a-dict"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("tagFilterExpression" in e for e in result["api_error"]))
+
+    def test_validate_settings_payload_manual_service_create_valid(self):
+        """create manual service with tagFilterExpression dict returns None"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "manual_service", "create",
+            {"tagFilterExpression": {"type": "TAG_FILTER", "name": "service.name",
+                                     "operator": "EQUALS", "entity": "NOT_APPLICABLE",
+                                     "value": "my-service"}}
+        )
+        self.assertIsNone(result)
+
+    def test_validate_settings_payload_manual_service_update_missing_id(self):
+        """update manual service without id returns elicitation"""
+        result = ApplicationSettingsMCPTools._validate_settings_payload(
+            "manual_service", "update",
+            {"tagFilterExpression": {"type": "TAG_FILTER"}},
+            id=None
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("'id'" in e for e in result["api_error"]))
+
+    # ------------------------------------------------------------------
+    # Integration: _add_application_config and _update_application_config
+    # call the validator and return elicitation on bad input
+    # ------------------------------------------------------------------
+
+    def test_add_application_config_missing_label_returns_elicitation(self):
+        """_add_application_config with no label returns elicitation dict"""
+        result = asyncio.run(self.client._add_application_config({"scope": "INCLUDE_ALL_DOWNSTREAM"}))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("api_error", result)
+
+    def test_add_application_config_invalid_scope_returns_elicitation(self):
+        """_add_application_config with invalid scope returns elicitation"""
+        result = asyncio.run(self.client._add_application_config(
+            {"label": "App", "scope": "WRONG_SCOPE"}
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("scope" in e for e in result["api_error"]))
+
+    def test_update_application_config_missing_id_returns_elicitation(self):
+        """_update_application_config with no id returns elicitation"""
+        result = asyncio.run(self.client._update_application_config(None, {"label": "App"}))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("'id'" in e for e in result["api_error"]))
+
+    def test_create_endpoint_config_missing_fields_returns_elicitation(self):
+        """_create_endpoint_config with missing endpointCase and serviceId returns elicitation"""
+        result = asyncio.run(self.client._create_endpoint_config({}))
+        self.assertTrue(result.get("elicitation_needed"))
+        all_errors = " ".join(result["api_error"])
+        self.assertIn("endpointCase", all_errors)
+        self.assertIn("serviceId", all_errors)
+
+    def test_create_endpoint_config_invalid_endpoint_case_returns_elicitation(self):
+        """_create_endpoint_config with invalid endpointCase value returns elicitation"""
+        result = asyncio.run(self.client._create_endpoint_config(
+            {"endpointCase": "CAMEL", "serviceId": "svc1"}
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("CAMEL" in e for e in result["api_error"]))
+
+    def test_update_endpoint_config_missing_id_returns_elicitation(self):
+        """_update_endpoint_config without id returns elicitation"""
+        result = asyncio.run(self.client._update_endpoint_config(
+            None, {"endpointCase": "ORIGINAL", "serviceId": "svc1"}
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+
+    def test_add_service_config_missing_fields_returns_elicitation(self):
+        """_add_service_config with empty payload returns all errors in one pass"""
+        result = asyncio.run(self.client._add_service_config({}))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertGreaterEqual(len(result["api_error"]), 3)
+
+    def test_update_service_config_missing_id_returns_elicitation(self):
+        """_update_service_config without id returns elicitation"""
+        result = asyncio.run(self.client._update_service_config(
+            None,
+            {"label": "svc", "name": "svc", "enabled": True, "matchSpecification": {}}
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+
+    def test_add_manual_service_config_missing_tag_filter_returns_elicitation(self):
+        """_add_manual_service_config without tagFilterExpression returns elicitation"""
+        result = asyncio.run(self.client._add_manual_service_config({}))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("tagFilterExpression" in e for e in result["api_error"]))
+
+    def test_update_manual_service_config_missing_id_returns_elicitation(self):
+        """_update_manual_service_config without id returns elicitation"""
+        result = asyncio.run(self.client._update_manual_service_config(
+            None,
+            {"tagFilterExpression": {"type": "TAG_FILTER"}}
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+
+
+
+    # ------------------------------------------------------------------
+    # Pre-flight elicitation tests for execute_settings_operation
+    # ------------------------------------------------------------------
+
+    def test_execute_settings_get_missing_id_returns_elicitation(self):
+        """execute_settings_operation 'get' without id returns elicitation_needed."""
+        result = asyncio.run(self.client.execute_settings_operation(
+            operation="get", resource_subtype="application", id=None))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("id" in e for e in result["api_error"]))
+
+    def test_execute_settings_delete_missing_id_returns_elicitation(self):
+        """execute_settings_operation 'delete' without id returns elicitation_needed."""
+        result = asyncio.run(self.client.execute_settings_operation(
+            operation="delete", resource_subtype="application", id=None))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("id" in e for e in result["api_error"]))
+
+    def test_execute_settings_create_missing_payload_returns_elicitation(self):
+        """execute_settings_operation 'create' without payload returns elicitation_needed."""
+        result = asyncio.run(self.client.execute_settings_operation(
+            operation="create", resource_subtype="application", id=None, payload=None))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("payload" in e for e in result["api_error"]))
+
+    def test_execute_settings_update_missing_both_returns_consolidated_elicitation(self):
+        """execute_settings_operation 'update' without id AND payload returns both errors in one response."""
+        result = asyncio.run(self.client.execute_settings_operation(
+            operation="update", resource_subtype="application", id=None, payload=None))
+        self.assertTrue(result.get("elicitation_needed"))
+        all_errors = " ".join(result["api_error"])
+        self.assertIn("id", all_errors)
+        self.assertIn("payload", all_errors)
 
 
 if __name__ == '__main__':

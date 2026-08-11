@@ -9,7 +9,16 @@ from datetime import datetime
 from unittest.mock import patch
 
 from src.core.validation import (
+    RETRIEVAL_SIZE_MAX,
+    RETRIEVAL_SIZE_MIN,
+    VALID_AGGREGATIONS,
+    VALID_ENTITY_VALUES,
+    VALID_ORDER_DIRECTIONS,
+    VALID_TAG_FILTER_OPERATORS,
+    WINDOW_SIZE_MAX_MS,
+    BooleanCoercer,
     EventsValidator,
+    StructureValidator,
     TimeValidator,
     ValidationError,
     ValidationResult,
@@ -474,6 +483,415 @@ class TestValidatorConstants(unittest.TestCase):
         """Test EventsValidator VALID_EVENT_TYPES constant"""
         expected = ["incident", "issue", "change"]
         self.assertEqual(EventsValidator.VALID_EVENT_TYPES, expected)
+
+
+# ---------------------------------------------------------------------------
+# StructureValidator tests
+# ---------------------------------------------------------------------------
+
+class TestStructureValidatorTagFilter(unittest.TestCase):
+    """Tests for StructureValidator.validate_tag_filter_expression"""
+
+    def _valid_tag_filter(self):
+        return {
+            "type": "TAG_FILTER",
+            "name": "service.name",
+            "operator": "EQUALS",
+            "entity": "DESTINATION",
+            "value": "my-service",
+        }
+
+    def test_none_returns_none(self):
+        """Optional field: None → None (no error)"""
+        self.assertIsNone(StructureValidator.validate_tag_filter_expression(None))
+
+    def test_valid_tag_filter_returns_none(self):
+        self.assertIsNone(
+            StructureValidator.validate_tag_filter_expression(self._valid_tag_filter())
+        )
+
+    def test_valid_expression_returns_none(self):
+        expr = {
+            "type": "EXPRESSION",
+            "logicalOperator": "AND",
+            "elements": [self._valid_tag_filter()],
+        }
+        self.assertIsNone(StructureValidator.validate_tag_filter_expression(expr))
+
+    def test_missing_entity_flagged(self):
+        tf = self._valid_tag_filter()
+        del tf["entity"]
+        result = StructureValidator.validate_tag_filter_expression(tf)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+        self.assertTrue(any("entity" in e and "MISSING" in e for e in result["api_error"]))
+
+    def test_invalid_entity_flagged(self):
+        tf = self._valid_tag_filter()
+        tf["entity"] = "WRONG"
+        result = StructureValidator.validate_tag_filter_expression(tf)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("entity" in e for e in result["api_error"]))
+
+    def test_invalid_operator_flagged(self):
+        tf = self._valid_tag_filter()
+        tf["operator"] = "LIKE"
+        result = StructureValidator.validate_tag_filter_expression(tf)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("operator" in e for e in result["api_error"]))
+
+    def test_missing_name_flagged(self):
+        tf = self._valid_tag_filter()
+        tf["name"] = ""
+        result = StructureValidator.validate_tag_filter_expression(tf)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("name" in e for e in result["api_error"]))
+
+    def test_invalid_type_flagged(self):
+        result = StructureValidator.validate_tag_filter_expression(
+            {"type": "UNKNOWN", "name": "x", "operator": "EQUALS", "entity": "DESTINATION"}
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("type" in e for e in result["api_error"]))
+
+    def test_non_dict_flagged(self):
+        result = StructureValidator.validate_tag_filter_expression("not-a-dict")
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_multiple_errors_collected_in_one_pass(self):
+        """Missing entity AND invalid operator must both appear in one response."""
+        tf = {"type": "TAG_FILTER", "name": "service.name", "operator": "LIKE"}
+        # entity missing, operator bad → 2 errors
+        result = StructureValidator.validate_tag_filter_expression(tf)
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(len(result["api_error"]), 2)
+
+    def test_expression_invalid_logical_operator(self):
+        expr = {
+            "type": "EXPRESSION",
+            "logicalOperator": "XOR",
+            "elements": [self._valid_tag_filter()],
+        }
+        result = StructureValidator.validate_tag_filter_expression(expr)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("logicalOperator" in e for e in result["api_error"]))
+
+    def test_expression_missing_elements(self):
+        expr = {"type": "EXPRESSION", "logicalOperator": "AND"}
+        result = StructureValidator.validate_tag_filter_expression(expr)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("elements" in e for e in result["api_error"]))
+
+    def test_nested_expression_error_reported(self):
+        """Errors in nested elements must bubble up."""
+        bad_child = {"type": "TAG_FILTER", "name": "x", "operator": "BAD_OP", "entity": "DESTINATION"}
+        expr = {"type": "EXPRESSION", "logicalOperator": "AND", "elements": [bad_child]}
+        result = StructureValidator.validate_tag_filter_expression(expr)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("operator" in e for e in result["api_error"]))
+
+    def test_custom_field_name_in_error(self):
+        result = StructureValidator.validate_tag_filter_expression(
+            {"type": "TAG_FILTER", "name": "x", "operator": "EQUALS"},
+            field_name="myFilter",
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("myFilter" in e for e in result["api_error"]))
+
+
+class TestStructureValidatorMetrics(unittest.TestCase):
+    """Tests for StructureValidator.validate_metrics_array"""
+
+    def _valid_metrics(self):
+        return [{"metric": "calls", "aggregation": "SUM"}]
+
+    def test_none_optional_returns_none(self):
+        self.assertIsNone(StructureValidator.validate_metrics_array(None))
+
+    def test_none_required_returns_elicitation(self):
+        result = StructureValidator.validate_metrics_array(None, required=True)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_valid_metrics_returns_none(self):
+        self.assertIsNone(StructureValidator.validate_metrics_array(self._valid_metrics()))
+
+    def test_not_a_list(self):
+        result = StructureValidator.validate_metrics_array({"metric": "calls"})
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_empty_list_required(self):
+        result = StructureValidator.validate_metrics_array([], required=True)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_empty_list_optional_returns_none(self):
+        self.assertIsNone(StructureValidator.validate_metrics_array([]))
+
+    def test_exceeds_max_items(self):
+        metrics = [{"metric": f"m{i}", "aggregation": "SUM"} for i in range(6)]
+        result = StructureValidator.validate_metrics_array(metrics, max_items=5)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("maximum" in e for e in result["api_error"]))
+
+    def test_invalid_aggregation(self):
+        result = StructureValidator.validate_metrics_array(
+            [{"metric": "calls", "aggregation": "AVERAGE"}]
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(any("aggregation" in e for e in result["api_error"]))
+
+    def test_missing_metric_name(self):
+        result = StructureValidator.validate_metrics_array([{"aggregation": "SUM"}])
+        self.assertIsNotNone(result)
+        self.assertTrue(any("metric" in e for e in result["api_error"]))
+
+    def test_multiple_errors_in_one_pass(self):
+        """Two bad entries → all errors in one dict."""
+        metrics = [
+            {"metric": "", "aggregation": "BAD"},
+            {"metric": "latency", "aggregation": "NOPE"},
+        ]
+        result = StructureValidator.validate_metrics_array(metrics)
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(len(result["api_error"]), 2)
+
+    def test_all_valid_aggregations_accepted(self):
+        for agg in VALID_AGGREGATIONS:
+            result = StructureValidator.validate_metrics_array(
+                [{"metric": "calls", "aggregation": agg}]
+            )
+            self.assertIsNone(result, f"Expected None for aggregation={agg}")
+
+
+class TestStructureValidatorOrder(unittest.TestCase):
+    """Tests for StructureValidator.validate_order"""
+
+    def test_none_returns_none(self):
+        self.assertIsNone(StructureValidator.validate_order(None))
+
+    def test_valid_asc(self):
+        self.assertIsNone(StructureValidator.validate_order({"by": "calls", "direction": "ASC"}))
+
+    def test_valid_desc(self):
+        self.assertIsNone(StructureValidator.validate_order({"by": "latency", "direction": "DESC"}))
+
+    def test_lowercase_direction_flagged(self):
+        result = StructureValidator.validate_order({"by": "calls", "direction": "desc"})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("direction" in e for e in result["api_error"]))
+
+    def test_missing_by(self):
+        result = StructureValidator.validate_order({"direction": "ASC"})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("by" in e for e in result["api_error"]))
+
+    def test_missing_direction(self):
+        result = StructureValidator.validate_order({"by": "calls"})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("direction" in e for e in result["api_error"]))
+
+    def test_not_a_dict(self):
+        result = StructureValidator.validate_order("ASC")
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_multiple_errors_collected(self):
+        result = StructureValidator.validate_order({"by": "", "direction": "asc"})
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(len(result["api_error"]), 2)
+
+
+class TestStructureValidatorTimeFrame(unittest.TestCase):
+    """Tests for StructureValidator.validate_time_frame"""
+
+    def test_none_returns_none(self):
+        self.assertIsNone(StructureValidator.validate_time_frame(None))
+
+    def test_valid_window_only(self):
+        self.assertIsNone(StructureValidator.validate_time_frame({"windowSize": 3_600_000}))
+
+    def test_valid_with_to(self):
+        self.assertIsNone(
+            StructureValidator.validate_time_frame({"to": 1_710_658_800_000, "windowSize": 3_600_000})
+        )
+
+    def test_window_size_zero_is_valid(self):
+        self.assertIsNone(StructureValidator.validate_time_frame({"windowSize": 0}))
+
+    def test_window_size_at_max_is_valid(self):
+        self.assertIsNone(StructureValidator.validate_time_frame({"windowSize": WINDOW_SIZE_MAX_MS}))
+
+    def test_window_size_exceeds_max(self):
+        result = StructureValidator.validate_time_frame({"windowSize": WINDOW_SIZE_MAX_MS + 1})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("windowSize" in e for e in result["api_error"]))
+
+    def test_negative_window_size(self):
+        result = StructureValidator.validate_time_frame({"windowSize": -1})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("windowSize" in e for e in result["api_error"]))
+
+    def test_non_int_window_size(self):
+        result = StructureValidator.validate_time_frame({"windowSize": "3600000"})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("windowSize" in e for e in result["api_error"]))
+
+    def test_not_a_dict(self):
+        result = StructureValidator.validate_time_frame(3_600_000)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_missing_window_size_is_ok(self):
+        """windowSize is optional — dict without it should pass."""
+        self.assertIsNone(StructureValidator.validate_time_frame({"to": 1_710_658_800_000}))
+
+
+class TestStructureValidatorPagination(unittest.TestCase):
+    """Tests for StructureValidator.validate_pagination"""
+
+    def test_none_returns_none(self):
+        self.assertIsNone(StructureValidator.validate_pagination(None))
+
+    def test_valid_retrieval_size(self):
+        self.assertIsNone(StructureValidator.validate_pagination({"retrievalSize": 50}))
+
+    def test_min_boundary(self):
+        self.assertIsNone(StructureValidator.validate_pagination({"retrievalSize": RETRIEVAL_SIZE_MIN}))
+
+    def test_max_boundary(self):
+        self.assertIsNone(StructureValidator.validate_pagination({"retrievalSize": RETRIEVAL_SIZE_MAX}))
+
+    def test_below_min(self):
+        result = StructureValidator.validate_pagination({"retrievalSize": 0})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("retrievalSize" in e for e in result["api_error"]))
+
+    def test_above_max(self):
+        result = StructureValidator.validate_pagination({"retrievalSize": RETRIEVAL_SIZE_MAX + 1})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("retrievalSize" in e for e in result["api_error"]))
+
+    def test_non_int_retrieval_size(self):
+        result = StructureValidator.validate_pagination({"retrievalSize": "50"})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("retrievalSize" in e for e in result["api_error"]))
+
+    def test_not_a_dict(self):
+        result = StructureValidator.validate_pagination(50)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_custom_max_retrieval_size(self):
+        """Custom max (e.g. trace details allows up to 10 000)."""
+        result = StructureValidator.validate_pagination(
+            {"retrievalSize": 500},
+            max_retrieval_size=10_000,
+        )
+        self.assertIsNone(result)
+
+
+class TestStructureValidatorGroup(unittest.TestCase):
+    """Tests for StructureValidator.validate_group"""
+
+    def test_none_optional_returns_none(self):
+        self.assertIsNone(StructureValidator.validate_group(None))
+
+    def test_none_required_returns_elicitation(self):
+        result = StructureValidator.validate_group(None, required=True)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_valid_group(self):
+        group = {"groupbyTag": "service.name", "groupbyTagEntity": "DESTINATION"}
+        self.assertIsNone(StructureValidator.validate_group(group))
+
+    def test_camel_case_variant_accepted(self):
+        """groupByTag (capital B) should also be accepted."""
+        group = {"groupByTag": "service.name", "groupByTagEntity": "SOURCE"}
+        self.assertIsNone(StructureValidator.validate_group(group))
+
+    def test_missing_groupby_tag(self):
+        result = StructureValidator.validate_group({"groupbyTagEntity": "DESTINATION"})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("groupbyTag" in e for e in result["api_error"]))
+
+    def test_missing_groupby_tag_entity(self):
+        result = StructureValidator.validate_group({"groupbyTag": "service.name"})
+        self.assertIsNotNone(result)
+        self.assertTrue(any("groupbyTagEntity" in e for e in result["api_error"]))
+
+    def test_invalid_groupby_tag_entity(self):
+        group = {"groupbyTag": "service.name", "groupbyTagEntity": "ALL"}
+        result = StructureValidator.validate_group(group)
+        self.assertIsNotNone(result)
+        self.assertTrue(any("groupbyTagEntity" in e for e in result["api_error"]))
+
+    def test_not_a_dict(self):
+        result = StructureValidator.validate_group("service.name")
+        self.assertIsNotNone(result)
+        self.assertTrue(result["elicitation_needed"])
+
+    def test_all_valid_entity_values_accepted(self):
+        for entity in VALID_ENTITY_VALUES:
+            group = {"groupbyTag": "service.name", "groupbyTagEntity": entity}
+            self.assertIsNone(StructureValidator.validate_group(group), f"Failed for entity={entity}")
+
+    def test_multiple_errors_collected(self):
+        result = StructureValidator.validate_group({})
+        self.assertIsNotNone(result)
+        # Both groupbyTag and groupbyTagEntity missing
+        self.assertGreaterEqual(len(result["api_error"]), 2)
+
+
+# ---------------------------------------------------------------------------
+# BooleanCoercer tests
+# ---------------------------------------------------------------------------
+
+class TestBooleanCoercer(unittest.TestCase):
+    """Tests for BooleanCoercer.coerce"""
+
+    def test_true_bool_passthrough(self):
+        self.assertIs(BooleanCoercer.coerce(True), True)
+
+    def test_false_bool_passthrough(self):
+        self.assertIs(BooleanCoercer.coerce(False), False)
+
+    def test_none_returns_none(self):
+        self.assertIsNone(BooleanCoercer.coerce(None))
+
+    def test_int_one_returns_true(self):
+        self.assertIs(BooleanCoercer.coerce(1), True)
+
+    def test_int_zero_returns_false(self):
+        self.assertIs(BooleanCoercer.coerce(0), False)
+
+    def test_other_int_returns_none(self):
+        self.assertIsNone(BooleanCoercer.coerce(2))
+        self.assertIsNone(BooleanCoercer.coerce(-1))
+
+    def test_string_true_variants(self):
+        for val in ("true", "True", "TRUE", "yes", "YES", "on", "ON", "1"):
+            self.assertIs(BooleanCoercer.coerce(val), True, f"Failed for {val!r}")
+
+    def test_string_false_variants(self):
+        for val in ("false", "False", "FALSE", "no", "NO", "off", "OFF", "0"):
+            self.assertIs(BooleanCoercer.coerce(val), False, f"Failed for {val!r}")
+
+    def test_unrecognised_string_returns_none(self):
+        self.assertIsNone(BooleanCoercer.coerce("maybe"))
+        self.assertIsNone(BooleanCoercer.coerce("enabled"))
+        self.assertIsNone(BooleanCoercer.coerce(""))
+
+    def test_whitespace_stripped(self):
+        self.assertIs(BooleanCoercer.coerce("  true  "), True)
+        self.assertIs(BooleanCoercer.coerce("  false  "), False)
+
+    def test_non_scalar_returns_none(self):
+        self.assertIsNone(BooleanCoercer.coerce([]))
+        self.assertIsNone(BooleanCoercer.coerce({}))
 
 
 if __name__ == '__main__':

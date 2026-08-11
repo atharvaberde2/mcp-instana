@@ -100,6 +100,9 @@ from src.core.utils import BaseInstanaClient, register_as_tool, with_header_auth
 
 logger = logging.getLogger(__name__)
 
+# Validation hint constants
+_TS_HINT_MS = "Unix timestamp in milliseconds (e.g., 1748786400000)"
+
 
 class MaintenanceWindowMCPTools(BaseInstanaClient):
     """
@@ -313,7 +316,7 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
             conversion_result = self._convert_string_parameters(
                 start_time, end_time, duration_minutes, duration_hours, duration_days
             )
-            if "error" in conversion_result:
+            if "elicitation_needed" in conversion_result or "error" in conversion_result:
                 return conversion_result
 
             start_time, end_time, duration_minutes, duration_hours, duration_days = conversion_result["values"]
@@ -444,13 +447,19 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
                 try:
                     converted_values.append(int(param_value))
                 except ValueError:
-                    error_msg = {
-                        "error": f"{param_name} must be {description}: {param_value}",
-                        "suggestion": f"Provide {param_name} as {description}"
+                    expected = description + (f" (e.g., {example})" if example else "")
+                    return {
+                        "elicitation_needed": True,
+                        "reason": "invalid_param_type",
+                        "api_error": [
+                            {
+                                "field": param_name,
+                                "issue": f"'{param_value}' cannot be converted to an integer",
+                                "expected": expected
+                            }
+                        ],
+                        "message": f"Parameter '{param_name}' must be {expected}, got: '{param_value}'"
                     }
-                    if example:
-                        error_msg["suggestion"] += f" (e.g., {example})"
-                    return error_msg
             else:
                 converted_values.append(param_value)
 
@@ -465,8 +474,16 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
 
         if operation not in valid_operations:
             return {
-                "error": f"Invalid operation '{operation}'",
-                "valid_operations": valid_operations
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid maintenance window operation",
+                        "expected": valid_operations
+                    }
+                ],
+                "message": f"Invalid operation '{operation}'. Valid operations: {valid_operations}"
             }
         return None
 
@@ -526,7 +543,7 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
                 tag_name=tag_name, ctx=ctx
             ),
             "validate": lambda: self._validate_window_params(
-                application_id=application_id, start_time=start_time
+                application_id=application_id or imap_code, start_time=start_time
             ),
             "get_templates": lambda: self._get_templates()
         }
@@ -641,7 +658,7 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
             validation_result = self._validate_create_params(
                 imap_code, application_id, start_time, template
             )
-            if "error" in validation_result:
+            if "elicitation_needed" in validation_result:
                 return validation_result
 
             target_code = validation_result["target_code"]
@@ -775,21 +792,37 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
         # Use imap_code if provided, otherwise use application_id as imap_code
         target_code = imap_code or application_id
 
-        # Validate required parameters
+        # Collect all validation errors in one pass
+        errors = []
         if not target_code:
-            return {"error": "imap_code or application_id is required"}
-
+            errors.append({
+                "field": "imap_code / application_id",
+                "issue": "Either imap_code or application_id is required",
+                "example": "imap_code='EAL-012471'"
+            })
         if not start_time:
-            return {"error": self.ERROR_START_TIME_REQUIRED}
+            errors.append({
+                "field": "start_time",
+                "issue": self.ERROR_START_TIME_REQUIRED,
+                "expected": _TS_HINT_MS
+            })
+        if template and template not in self.TEMPLATES:
+            errors.append({
+                "field": "template",
+                "issue": f"'{template}' is not a valid template",
+                "expected": list(self.TEMPLATES.keys())
+            })
+        if errors:
+            return {
+                "elicitation_needed": True,
+                "reason": "missing_required_params",
+                "api_error": errors,
+                "message": f"Missing or invalid parameters for create: {[e['field'] for e in errors]}"
+            }
 
         # Apply template if specified
         template_config = {}
         if template:
-            if template not in self.TEMPLATES:
-                return {
-                    "error": f"Invalid template '{template}'",
-                    "available_templates": list(self.TEMPLATES.keys())
-                }
             template_config = self.TEMPLATES[template].copy()
             logger.info(f"Applying template: {template}")
 
@@ -911,16 +944,35 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
             start_dt = datetime.fromtimestamp(start_time / 1000)
             current_dt = datetime.fromtimestamp(current_time / 1000)
             return {
-                "error": "start_time cannot be in the past",
-                "start_time_provided": start_time,
-                "start_time_readable": start_dt.strftime(self.DATETIME_FORMAT_UTC),
-                "current_time": current_time,
-                "current_time_readable": current_dt.strftime(self.DATETIME_FORMAT_UTC),
-                "suggestion": f"Use a time after {current_dt.strftime(self.DATETIME_FORMAT_UTC)}. Try: 'starting at {(current_dt.replace(hour=current_dt.hour+2)).strftime('%Y-%m-%d %H:%M:%S')} UTC'"
+                "elicitation_needed": True,
+                "reason": "invalid_time_params",
+                "api_error": [
+                    {
+                        "field": "start_time",
+                        "issue": "start_time cannot be in the past",
+                        "provided": start_time,
+                        "provided_readable": start_dt.strftime(self.DATETIME_FORMAT_UTC),
+                        "current_time_readable": current_dt.strftime(self.DATETIME_FORMAT_UTC),
+                        "expected": f"A timestamp after {current_dt.strftime(self.DATETIME_FORMAT_UTC)}"
+                    }
+                ],
+                "message": f"start_time is in the past ({start_dt.strftime(self.DATETIME_FORMAT_UTC)}). Provide a future timestamp."
             }
 
         if end_time <= start_time:
-            return {"error": "end_time must be after start_time"}
+            return {
+                "elicitation_needed": True,
+                "reason": "invalid_time_params",
+                "api_error": [
+                    {
+                        "field": "end_time",
+                        "issue": "end_time must be after start_time",
+                        "start_time": start_time,
+                        "end_time": end_time
+                    }
+                ],
+                "message": "end_time must be after start_time."
+            }
 
         return None
 
@@ -1090,10 +1142,16 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
         """Validate window_id for modify operation."""
         if not window_id:
             return {
-                "error": "window_id is required for modify operation",
-                "help": "Please provide the maintenance window ID to modify. You can find window IDs by listing windows first.",
-                "example": "To modify window 'eeUHJZv8_XG-dDzi', use: operation='modify', params={'window_id': 'eeUHJZv8_XG-dDzi', 'duration_minutes': 60}",
-                "tip": "First list windows to get the window_id, then use that ID in the modify request"
+                "elicitation_needed": True,
+                "reason": "missing_required_params",
+                "api_error": [
+                    {
+                        "field": "window_id",
+                        "issue": "window_id is required for modify",
+                        "hint": "Use list_active or list_scheduled to find window IDs"
+                    }
+                ],
+                "message": "Missing required parameter 'window_id' for modify. Use list_active or list_scheduled to find IDs."
             }
         return None
 
@@ -1425,7 +1483,18 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
         """
         try:
             if not window_id:
-                return {"error": "window_id is required"}
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "window_id",
+                            "issue": "window_id is required for close",
+                            "hint": "Use list_active to find active window IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'window_id' for close. Use list_active to find active window IDs."
+                }
 
             logger.info(f"Closing maintenance window: {window_id}")
 
@@ -1880,8 +1949,26 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
             # Use imap_codes if provided, otherwise use application_ids
             target_codes = imap_codes or application_ids
 
+            errors = []
             if not target_codes:
-                return {"error": "imap_codes or application_ids is required"}
+                errors.append({
+                    "field": "imap_codes / application_ids",
+                    "issue": "Either imap_codes or application_ids is required",
+                    "example": "imap_codes=['EAL-012471', 'ORZ-000012']"
+                })
+            if not start_time:
+                errors.append({
+                    "field": "start_time",
+                    "issue": self.ERROR_START_TIME_REQUIRED,
+                    "expected": _TS_HINT_MS
+                })
+            if errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": errors,
+                    "message": f"Missing required parameters for bulk_create: {[e['field'] for e in errors]}"
+                }
 
             results = []
             for code in target_codes:
@@ -1942,21 +2029,34 @@ class MaintenanceWindowMCPTools(BaseInstanaClient):
         Returns:
             Dictionary with validation results
         """
-        validation_errors = []
+        errors = []
 
         if not application_id:
-            validation_errors.append("application_id is required")
+            errors.append({
+                "field": "imap_code / application_id",
+                "issue": "Either imap_code or application_id is required",
+                "example": "imap_code='EAL-012471'"
+            })
 
         if not start_time:
-            validation_errors.append("start_time is required")
+            errors.append({
+                "field": "start_time",
+                "issue": "start_time is required",
+                "expected": _TS_HINT_MS
+            })
         elif start_time < get_current_timestamp(timezone="UTC", output_unit="milliseconds")["timestamp"]:
-            validation_errors.append("start_time cannot be in the past")
+            errors.append({
+                "field": "start_time",
+                "issue": "start_time cannot be in the past",
+                "expected": "A future Unix timestamp in milliseconds"
+            })
 
-        if validation_errors:
+        if errors:
             return {
-                "operation": "validate",
-                "status": "invalid",
-                "errors": validation_errors
+                "elicitation_needed": True,
+                "reason": "missing_required_params",
+                "api_error": errors,
+                "message": f"Invalid parameters for validate: {[e['field'] for e in errors]}"
             }
 
         return {

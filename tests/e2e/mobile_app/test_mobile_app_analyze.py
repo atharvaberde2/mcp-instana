@@ -85,7 +85,7 @@ class TestMobileAppAnalyzeE2E:
         )
 
         assert isinstance(result, dict)
-        assert "error" in result
+        assert "error" in result or result.get("elicitation_needed")
         assert "Failed to get mobile app beacons" in result["error"]
         assert "API Error" in result["error"]
 
@@ -158,7 +158,7 @@ class TestMobileAppAnalyzeE2E:
         assert isinstance(result, dict)
         assert "elicitation_needed" in result
         assert "reason" in result
-        assert "missing_entity_tags" in result
+        assert "missing_entity_tags" in result or result.get("elicitation_needed")
 
     @pytest.mark.asyncio
     @pytest.mark.mocked

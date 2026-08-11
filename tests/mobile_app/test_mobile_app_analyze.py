@@ -212,36 +212,40 @@ class TestMobileAppAnalyzeMCPTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn("summary", result)
 
     async def test_pagination_min_bound(self):
-        self.mock_api.get_mobile_app_beacons_without_preload_content.return_value = MockResponse(b'{"items":[]}')
+        """Out-of-range retrievalSize is now rejected by pre-flight validation."""
         pagination = {"retrievalSize": 0}
-        await self.client.get_all_mobile_app_beacons(
+        result = await self.client.get_all_mobile_app_beacons(
             beacon_type="SESSION_START",
             pagination=pagination,
             api_client=self.mock_api,
         )
-        self.assertEqual(pagination["retrievalSize"], 1)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("retrievalSize" in e for e in result.get("api_error", [])))
 
     async def test_pagination_max_bound(self):
-        self.mock_api.get_mobile_app_beacons_without_preload_content.return_value = MockResponse(b'{"items":[]}')
+        """Out-of-range retrievalSize is now rejected by pre-flight validation."""
         pagination = {"retrievalSize": 500}
-        await self.client.get_all_mobile_app_beacons(
+        result = await self.client.get_all_mobile_app_beacons(
             beacon_type="SESSION_START",
             pagination=pagination,
             api_client=self.mock_api,
         )
-        self.assertEqual(pagination["retrievalSize"], 200)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("retrievalSize" in e for e in result.get("api_error", [])))
 
     async def test_tag_filter_single_missing_required_fields(self):
-        self.mock_api.get_mobile_app_beacons_without_preload_content.return_value = MockResponse(b"{}")
+        """TAG_FILTER missing 'operator' is caught by StructureValidator pre-flight."""
         tag_filter = {"type": "TAG_FILTER", "name": "mobileBeacon.view.name", "entity": "NOT_APPLICABLE"}
         result = await self.client.get_all_mobile_app_beacons(
             beacon_type="SESSION_START",
             tag_filter_expression=tag_filter,
             api_client=self.mock_api,
         )
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("operator" in e for e in result.get("api_error", [])))
 
     async def test_tag_filter_expression(self):
+        """EXPRESSION missing logicalOperator is caught by StructureValidator pre-flight."""
         self.mock_api.get_mobile_app_beacons_without_preload_content.return_value = MockResponse(b'{"items":[]}')
         tag_filter = {
             "type": "EXPRESSION",
@@ -260,7 +264,9 @@ class TestMobileAppAnalyzeMCPTools(unittest.IsolatedAsyncioTestCase):
             tag_filter_expression=tag_filter,
             api_client=self.mock_api,
         )
-        self.assertIn("summary", result)
+        # Missing logicalOperator — caught by pre-flight validation
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("logicalOperator" in e for e in result.get("api_error", [])))
 
     async def test_invalid_tag_filter_conversion(self):
         class FailingTagFilter:
@@ -417,7 +423,7 @@ class TestMobileAppAnalyzeMCPTools(unittest.IsolatedAsyncioTestCase):
         try:
             result = await self.client.get_mobile_app_beacon_groups(
                 metrics=[{"metric": "beaconCount", "aggregation": "SUM"}],
-                group={"groupByTag": "mobileBeacon.mobileApp.name"},
+                group={"groupbyTag": "mobileBeacon.mobileApp.name", "groupbyTagEntity": "NOT_APPLICABLE"},
                 beacon_type="SESSION_START",
                 api_client=self.mock_api,
             )
@@ -644,6 +650,38 @@ class TestMobileAppAnalyzeMCPTools(unittest.IsolatedAsyncioTestCase):
         # These must be absent — proving filtering ran, not skipped due to None being falsy
         self.assertNotIn("unusedField1", beacon)
         self.assertNotIn("errorCount", beacon)  # 0 → skipped by _should_skip_field_value
+
+
+    async def test_get_beacons_invalid_beacon_type(self):
+        """Test get_all_mobile_app_beacons with an invalid beacon_type returns elicitation"""
+        result = await self.client.get_all_mobile_app_beacons(
+            beacon_type="INVALID_TYPE",
+            api_client=self.mock_api,
+        )
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("INVALID_TYPE" in e for e in result.get("api_error", [])))
+
+    async def test_get_beacons_invalid_time_frame(self):
+        """Test get_all_mobile_app_beacons with invalid windowSize returns elicitation"""
+        result = await self.client.get_all_mobile_app_beacons(
+            beacon_type="SESSION_START",
+            time_frame={"windowSize": 9_999_999_999},
+            api_client=self.mock_api,
+        )
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("windowSize" in e for e in result.get("api_error", [])))
+
+    async def test_get_beacons_multiple_validation_errors_consolidated(self):
+        """Test get_all_mobile_app_beacons collects all validation errors in one response"""
+        result = await self.client.get_all_mobile_app_beacons(
+            beacon_type="INVALID_TYPE",
+            pagination={"retrievalSize": 999},
+            time_frame={"windowSize": 9_999_999_999},
+            api_client=self.mock_api,
+        )
+        self.assertTrue(result.get("elicitation_needed"))
+        # All three errors must be present in one response
+        self.assertGreaterEqual(len(result.get("api_error", [])), 3)
 
 
 if __name__ == "__main__":

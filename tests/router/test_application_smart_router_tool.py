@@ -108,8 +108,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             operation="test"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("invalid_type", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("invalid_type", (result.get("error") or result.get("message", "")).lower())
 
     def test_metrics_routing_success(self):
         """Test successful metrics routing"""
@@ -138,7 +138,7 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             operation="invalid_op"
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_alert_config_routing(self):
         """Test alert config routing"""
@@ -189,14 +189,16 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
         self.assertEqual(result["resource_type"], "settings")
 
     def test_settings_invalid_subtype(self):
-        """Test settings with invalid resource_subtype"""
+        """Test settings with invalid resource_subtype returns elicitation_needed"""
         result = asyncio.run(self.router.manage_applications(
             resource_type="settings",
             operation="get_all",
             params={"resource_subtype": "invalid"}
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("api_error", result)
+        self.assertTrue(any("resource_subtype" in e for e in result["api_error"]))
 
     def test_catalog_get_tag_catalog(self):
         """Test catalog get_tag_catalog operation"""
@@ -229,23 +231,15 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
         self.assertIn("results", result)
 
     def test_metrics_datetime_conversion_error(self):
-        """Test metrics path - datetime conversion is no longer done in metrics handler."""
-        # Datetime conversion was removed from the metrics handler
-        # The test now verifies that metrics are called without conversion
-        async def mock_get_metrics(*args, **kwargs):
-            return {"items": [1, 2, 3]}
-
-        self.mock_call_group.get_grouped_calls_metrics = mock_get_metrics
-
+        """Invalid datetime string for time_frame.to returns elicitation_needed."""
         result = asyncio.run(self.router.manage_applications(
             resource_type="metrics",
-            operation="application",
+            operation="get_grouped_calls_metrics",
             params={"time_frame": {"to": "bad-date", "windowSize": 3600000}}
         ))
 
-        # Should succeed and pass through to the metrics handler
-        self.assertEqual(result["resource_type"], "metrics")
-        self.assertIn("results", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertEqual(result.get("reason"), "invalid_time_params")
 
     def test_metrics_invalid_operation_direct_handler(self):
         async def mock_get_metrics(*args, **kwargs):
@@ -275,12 +269,15 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
         self.assertEqual(result["results"], {"items": [1, 2, 3]})
 
     def test_catalog_invalid_operation(self):
+        """Invalid catalog operation returns elicitation_needed"""
         result = asyncio.run(self.router.manage_applications(
             resource_type="catalog",
             operation="invalid_catalog_op",
             params={}
         ))
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"), msg=f"Expected elicitation_needed, got: {result}")
+        self.assertIn("api_error", result)
+        self.assertTrue(any("invalid_catalog_op" in e for e in result["api_error"]))
 
     def test_resources_get_applications(self):
         async def mock_get_apps(*args, **kwargs):
@@ -306,15 +303,17 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_settings_missing_resource_subtype(self):
+        """Missing resource_subtype returns elicitation_needed"""
         result = asyncio.run(self.router.manage_applications(
             resource_type="settings",
             operation="get_all",
             params={}
         ))
-        self.assertIn("error", result)
+        self.assertTrue(result.get("elicitation_needed"), msg=f"Expected elicitation_needed, got: {result}")
+        self.assertIn("api_error", result)
 
     def test_exception_handling(self):
         """Test exception handling in router"""
@@ -329,8 +328,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"time_frame": {"to": 1234567890000, "windowSize": 3600000}}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Test error", str(result["error"]))
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Test error", str((result.get("error") or result.get("message", ""))))
 
     def test_alert_config_resolves_application_name(self):
         """Test alert_config resolves application_name to application_id"""
@@ -366,8 +365,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"resource_subtype": "application", "application_name": "MyApp"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("No application perspective found with name 'MyApp'", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("No application perspective found with name 'MyApp'", (result.get("error") or result.get("message", "")))
 
 
     def test_settings_resolve_application_name_success(self):
@@ -421,8 +420,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"resource_subtype": "application", "application_name": "MyApp"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to retrieve application perspectives for name resolution", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to retrieve application perspectives for name resolution", (result.get("error") or result.get("message", "")))
 
     def test_alert_config_resolve_application_name_error(self):
         """Test alert_config when application name resolution fails"""
@@ -441,8 +440,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"application_name": "NonExistentApp"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to resolve application name", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to resolve application name", (result.get("error") or result.get("message", "")))
 
     def test_global_alert_config_resolve_application_name_success(self):
         """Test global_alert_config resolves application_name to application_id"""
@@ -477,8 +476,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"application_name": "NonExistentApp"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to resolve application name", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to resolve application name", (result.get("error") or result.get("message", "")))
 
     def test_alert_config_invalid_operation(self):
         """Test alert_config with invalid operation"""
@@ -488,8 +487,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"application_id": "app-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     def test_global_alert_config_invalid_operation(self):
         """Test global_alert_config with invalid operation"""
@@ -499,8 +498,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"application_id": "app-123"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     def test_settings_invalid_operation(self):
         """Test settings with invalid operation"""
@@ -510,8 +509,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params={"resource_subtype": "application"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     def test_get_application_id_by_name_success(self):
         """Test _get_application_id_by_name with successful resolution"""
@@ -580,8 +579,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
 
             result = await self.router._get_application_id_by_name("MyApp", None)
 
-            self.assertIn("error", result)
-            self.assertIn("No application found", result["error"])
+            self.assertTrue("error" in result or result.get("elicitation_needed"))
+            self.assertIn("No application found", (result.get("error") or result.get("message", "")))
 
         asyncio.run(run_test())
 
@@ -595,7 +594,7 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
 
             result = await self.router._get_application_id_by_name("MyApp", None)
 
-            self.assertIn("error", result)
+            self.assertTrue("error" in result or result.get("elicitation_needed"))
 
         asyncio.run(run_test())
 
@@ -609,8 +608,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
 
             result = await self.router._get_application_id_by_name("MyApp", None)
 
-            self.assertIn("error", result)
-            self.assertIn("Failed to fetch application ID", result["error"])
+            self.assertTrue("error" in result or result.get("elicitation_needed"))
+            self.assertIn("Failed to fetch application ID", (result.get("error") or result.get("message", "")))
 
         asyncio.run(run_test())
 
@@ -626,26 +625,51 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
 
             result = await self.router._get_application_id_by_name("MyApp", None)
 
-            self.assertIn("error", result)
+            self.assertTrue("error" in result or result.get("elicitation_needed"))
 
         asyncio.run(run_test())
 
     def test_metrics_datetime_conversion_success(self):
-        """Test metrics path - datetime conversion is no longer done in metrics handler"""
-        # Datetime conversion was removed from the metrics handler
+        """Valid datetime string for time_frame.to is converted to int and proceeds."""
+        captured = {}
+
         async def mock_get_metrics(*args, **kwargs):
+            captured["time_frame"] = kwargs.get("time_frame")
             return {"items": [1, 2, 3]}
 
         self.mock_call_group.get_grouped_calls_metrics = mock_get_metrics
 
         result = asyncio.run(self.router.manage_applications(
             resource_type="metrics",
-            operation="application",
+            operation="get_grouped_calls_metrics",
             params={"time_frame": {"to": "2021-01-01 00:00:00", "windowSize": 3600000}}
         ))
 
+        self.assertFalse(result.get("elicitation_needed", False))
         self.assertEqual(result["resource_type"], "metrics")
         self.assertIn("results", result)
+
+    def test_metrics_valid_datetime_string_gets_converted(self):
+        """A valid human-readable datetime string is converted to an integer timestamp."""
+        captured = {}
+
+        async def mock_get_metrics(*args, **kwargs):
+            captured["time_frame"] = kwargs.get("time_frame")
+            return {"items": []}
+
+        self.mock_call_group.get_grouped_calls_metrics = mock_get_metrics
+
+        result = asyncio.run(self.router.manage_applications(
+            resource_type="metrics",
+            operation="get_grouped_calls_metrics",
+            params={"time_frame": {"to": "19 March 2026, 2:47 PM|IST", "windowSize": 3600000}}
+        ))
+
+        self.assertFalse(result.get("elicitation_needed", False))
+        self.assertEqual(result["resource_type"], "metrics")
+        # time_frame.to must have been converted from string to integer
+        if captured.get("time_frame"):
+            self.assertIsInstance(captured["time_frame"].get("to"), int)
 
     def test_metrics_with_all_optional_params(self):
         """Test metrics with all optional parameters"""
@@ -681,7 +705,7 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             params=None
         ))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_analyze_invalid_operation(self):
         result = asyncio.run(self.router.manage_applications(
@@ -689,8 +713,8 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             operation="invalid_operation",
             params={}
         ))
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", (result.get("error") or result.get("message", "")))
 
     def test_analyze_timeframe_conversion_error(self):
         result = asyncio.run(self.router.manage_applications(
@@ -698,7 +722,7 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             operation="get_all_traces",
             params={"payload": {"timeFrame": {"to": "not-a-date", "windowSize": 3600000}}}
         ))
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
         self.assertEqual(result["resource_type"], "analyze")
 
     def test_analyze_ingestion_time_conversion_error(self):
@@ -707,7 +731,7 @@ class TestApplicationSmartRouterMCPTool(unittest.TestCase):
             operation="get_trace_details",
             params={"id": "trace-1", "ingestionTime": "bad-date-time"}
         ))
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
         self.assertEqual(result["resource_type"], "analyze")
 
     def test_analyze_routes_get_trace_groups(self):

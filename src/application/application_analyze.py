@@ -4,6 +4,7 @@ Application Analyze MCP Tools Module
 This module provides application analyze tool functionality for Instana monitoring.
 """
 
+import ast
 import json
 import logging
 from datetime import datetime
@@ -30,6 +31,7 @@ except ImportError:
     raise
 
 from src.core.utils import BaseInstanaClient, register_as_tool, with_header_auth
+from src.core.validation import BooleanCoercer, StructureValidator
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -100,20 +102,46 @@ class ApplicationAnalyzeMCPTools(BaseInstanaClient):
             return {"error": f"Error executing {operation}: {e!s}"}
 
     def _validate_trace_details_params(self, id: str, retrieval_size: Optional[int], offset: Optional[int], ingestion_time: Optional[int]) -> Optional[Dict[str, Any]]:
-        """Validate parameters for get_trace_details."""
-        if not id:
-            logger.warning("Trace ID must be provided")
-            return {"error": "Trace ID must be provided"}
+        """Validate parameters for get_trace_details.
 
-        if offset is not None and ingestion_time is None:
-            logger.warning("If offset is provided, ingestion_time must also be provided")
-            return {"error": "If offset is provided, ingestion_time must also be provided"}
+        Collects ALL validation errors in one pass and returns a consolidated
+        elicitation dict so the LLM can correct everything in one round-trip.
+        Returns None when all parameters are valid.
+        """
+        errors: List[str] = []
+
+        if not id:
+            errors.append(
+                "id: required — must be a non-empty trace ID string "
+                "(obtain one from get_all_traces results)"
+            )
 
         if retrieval_size is not None and (retrieval_size < 1 or retrieval_size > 10000):
-            logger.warning(f"retrieval_size must be between 1 and 10000, got: {retrieval_size}")
-            return {"error": "retrieval_size must be between 1 and 10000"}
+            errors.append(
+                f"retrievalSize: {retrieval_size} is out of range. "
+                "Must be 1-10000"
+            )
 
-        return None
+        if offset is not None and ingestion_time is None:
+            errors.append(
+                "ingestionTime: required when offset is provided — "
+                "supply the ingestionTime cursor value from the previous page response"
+            )
+
+        if not errors:
+            return None
+
+        logger.warning(f"get_trace_details validation failed: {errors}")
+        return {
+            "elicitation_needed": True,
+            "reason": f"get_trace_details has {len(errors)} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The get_trace_details call has {len(errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
 
 
     @with_header_auth(ApplicationAnalyzeApi)
@@ -198,7 +226,6 @@ class ApplicationAnalyzeMCPTools(BaseInstanaClient):
             try:
                 return json.loads(payload.replace("'", "\""))
             except json.JSONDecodeError:
-                import ast
                 try:
                     return ast.literal_eval(payload)
                 except (SyntaxError, ValueError) as e:
@@ -328,6 +355,40 @@ class ApplicationAnalyzeMCPTools(BaseInstanaClient):
             if "error" in request_body:
                 return request_body
 
+            # --- Pre-flight validation (collect ALL errors in one pass) ---
+            all_errors: List[str] = []
+
+            # Coerce StrictBool fields before SDK sees them
+            for flag in ("includeInternal", "includeSynthetic"):
+                raw = request_body.get(flag)
+                if raw is not None:
+                    coerced = BooleanCoercer.coerce(raw)
+                    if coerced is not None:
+                        request_body[flag] = coerced
+
+            for validator_fn, field_key, kwargs in [
+                (StructureValidator.validate_tag_filter_expression, "tagFilterExpression", {}),
+                (StructureValidator.validate_order, "order", {}),
+                (StructureValidator.validate_pagination, "pagination", {}),
+                (StructureValidator.validate_time_frame, "timeFrame", {}),
+            ]:
+                result = validator_fn(request_body.get(field_key), **kwargs)
+                if result:
+                    all_errors.extend(result["api_error"])
+
+            if all_errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"get_all_traces payload has {len(all_errors)} validation problem(s)",
+                    "api_error": all_errors,
+                    "message": (
+                        f"The get_all_traces payload has {len(all_errors)} problem(s). "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e}" for e in all_errors)
+                    ),
+                }
+            # --- End validation ---
+
             # Call API using _without_preload_content to get raw response
             config = GetTraces.from_dict(request_body)
             result = api_client.get_traces_without_preload_content(get_traces=config)
@@ -345,6 +406,67 @@ class ApplicationAnalyzeMCPTools(BaseInstanaClient):
         except Exception as e:
             logger.error(f"Error in get_traces: {e}", exc_info=True)
             return {"error": f"Failed to get traces: {e!s}"}
+
+    _VALID_TRACE_GROUP_TAGS = frozenset({
+        "trace.endpoint.name",
+        "trace.service.name",
+    })
+
+    @staticmethod
+    def _coerce_bool_flags(request_body: Dict[str, Any]) -> None:
+        """Coerce StrictBool fields in-place before the SDK sees them."""
+        for flag in ("includeInternal", "includeSynthetic"):
+            raw = request_body.get(flag)
+            if raw is not None:
+                coerced = BooleanCoercer.coerce(raw)
+                if coerced is not None:
+                    request_body[flag] = coerced
+
+    @staticmethod
+    def _check_groupby_tag(group: Any, errors: List[str]) -> None:
+        """Append an error if groupbyTag is present but not in the allowed set."""
+        if not isinstance(group, dict):
+            return
+        groupby_tag = group.get("groupbyTag") or group.get("groupByTag")
+        if groupby_tag and groupby_tag not in ApplicationAnalyzeMCPTools._VALID_TRACE_GROUP_TAGS:
+            errors.append(
+                f"group.groupbyTag: '{groupby_tag}' is not supported for trace groups. "
+                f"Valid values: {sorted(ApplicationAnalyzeMCPTools._VALID_TRACE_GROUP_TAGS)}"
+            )
+
+    @staticmethod
+    def _check_calls_metric(metrics: Any, errors: List[str]) -> None:
+        """Append an error for each 'calls' entry found in the metrics list."""
+        if not isinstance(metrics, list):
+            return
+        for idx, entry in enumerate(metrics):
+            if isinstance(entry, dict) and entry.get("metric") == "calls":
+                errors.append(
+                    f"metrics[{idx}].metric: 'calls' is not supported for trace group "
+                    "operations. Use 'traces' or another trace-specific metric instead."
+                )
+
+    @staticmethod
+    def _validate_trace_group_structure(request_body: Dict[str, Any]) -> List[str]:
+        """Run all structural and domain validators; return collected error strings."""
+        errors: List[str] = []
+
+        for validator_fn, field_key, kwargs in [
+            (StructureValidator.validate_group, "group", {"required": True}),
+            (StructureValidator.validate_metrics_array, "metrics", {"required": True, "max_items": 5}),
+            (StructureValidator.validate_tag_filter_expression, "tagFilterExpression", {}),
+            (StructureValidator.validate_order, "order", {}),
+            (StructureValidator.validate_pagination, "pagination", {}),
+            (StructureValidator.validate_time_frame, "timeFrame", {}),
+        ]:
+            result = validator_fn(request_body.get(field_key), **kwargs)
+            if result:
+                errors.extend(result["api_error"])
+
+        ApplicationAnalyzeMCPTools._check_groupby_tag(request_body.get("group") or {}, errors)
+        ApplicationAnalyzeMCPTools._check_calls_metric(request_body.get("metrics"), errors)
+
+        return errors
 
     @with_header_auth(ApplicationAnalyzeApi)
     async def get_trace_groups(
@@ -385,6 +507,21 @@ class ApplicationAnalyzeMCPTools(BaseInstanaClient):
             if "error" in request_body:
                 return request_body
 
+            self._coerce_bool_flags(request_body)
+
+            all_errors = self._validate_trace_group_structure(request_body)
+            if all_errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"get_trace_groups payload has {len(all_errors)} validation problem(s)",
+                    "api_error": all_errors,
+                    "message": (
+                        f"The get_trace_groups payload has {len(all_errors)} problem(s). "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e}" for e in all_errors)
+                    ),
+                }
+
             config = GetTraceGroups.from_dict(request_body)
             result = api_client.get_trace_groups_without_preload_content(get_trace_groups=config)
 
@@ -392,10 +529,8 @@ class ApplicationAnalyzeMCPTools(BaseInstanaClient):
             result_dict = json.loads(response_text)
             result_dict = self._sanitize_service_data(result_dict)
 
-            # Build and return standardized response
             return self._build_paginated_response(result_dict, include_total_hits=True)
 
         except Exception as e:
             logger.error(f"Error in get_trace_groups: {e}", exc_info=True)
             return {"error": f"Failed to get trace groups: {e!s}"}
-

@@ -170,8 +170,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
     def test_get_available_payload_keys_missing_plugin_id(self):
         result = asyncio.run(self.client.get_available_payload_keys_by_plugin_id(plugin_id=""))
-        self.assertIn("error", result)
-        self.assertIn("required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("required", (result.get("error") or result.get("message", "")))
 
     def test_get_available_payload_keys_dict_result(self):
         mock_result = {"payload_keys": ["k1", "k2"]}
@@ -230,12 +230,12 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_available_payload_keys_by_plugin_id(plugin_id="host"))
 
-        self.assertIn("error", result)
-        self.assertIn("HTTP 500", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("HTTP 500", (result.get("error") or result.get("message", "")))
 
     def test_get_infrastructure_catalog_metrics_missing_plugin(self):
         result = asyncio.run(self.client.get_infrastructure_catalog_metrics(plugin=""))
-        self.assertEqual(result, {"error": "plugin parameter is required"})
+        self.assertTrue(result.get("elicitation_needed") or "error" in result)
 
     def test_get_infrastructure_catalog_metrics_list_of_dicts(self):
         response = MagicMock()
@@ -357,8 +357,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
     def test_get_tag_catalog_missing_plugin(self):
         result = asyncio.run(self.client.get_tag_catalog(plugin=""))
-        self.assertIn("error", result)
-        self.assertIn("required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("required", (result.get("error") or result.get("message", "")))
 
     def test_get_tag_catalog_sdk_success(self):
         mock_result = {"tags": ["host.name", "zone"]}
@@ -416,8 +416,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_tag_catalog(plugin="host"))
 
-        self.assertIn("error", result)
-        self.assertIn("HTTP 500", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("HTTP 500", (result.get("error") or result.get("message", "")))
 
     def test_get_tag_catalog_fallback_json_decode_error(self):
         """Test get_tag_catalog fallback with JSON decode error"""
@@ -429,8 +429,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_tag_catalog(plugin="host"))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to parse JSON", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to parse JSON", (result.get("error") or result.get("message", "")))
 
     def test_get_tag_catalog_non_406_error(self):
         """Test get_tag_catalog with non-406 error"""
@@ -438,8 +438,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_tag_catalog(plugin="host"))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to get tag catalog", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get tag catalog", (result.get("error") or result.get("message", "")))
 
     def test_get_tag_catalog_all_success(self):
         """Test get_tag_catalog_all with successful response"""
@@ -484,8 +484,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_tag_catalog_all())
 
-        self.assertIn("error", result)
-        self.assertIn("Authentication failed", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Authentication failed", (result.get("error") or result.get("message", "")))
 
     def test_get_tag_catalog_all_fallback_403_error(self):
         """Test get_tag_catalog_all fallback with 403 error"""
@@ -496,8 +496,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_tag_catalog_all())
 
-        self.assertIn("error", result)
-        self.assertIn("Authentication failed", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Authentication failed", (result.get("error") or result.get("message", "")))
 
     def test_get_tag_catalog_all_fallback_json_error(self):
         """Test get_tag_catalog_all fallback with JSON decode error"""
@@ -509,8 +509,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_tag_catalog_all())
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to parse JSON", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to parse JSON", (result.get("error") or result.get("message", "")))
 
     def test_get_tag_catalog_all_exception(self):
         """Test get_tag_catalog_all with general exception"""
@@ -519,7 +519,7 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_tag_catalog_all())
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_summarize_tag_catalog_empty(self):
         """Test _summarize_tag_catalog with empty catalog"""
@@ -588,7 +588,7 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_infrastructure_catalog_search_fields())
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_infrastructure_catalog_search_fields_skip_invalid(self):
         """Test get_infrastructure_catalog_search_fields skips invalid fields"""
@@ -660,8 +660,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_infrastructure_catalog_metrics(plugin="host"))
 
-        self.assertIn("error", result)
-        self.assertIn("Failed to get infrastructure catalog metrics", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Failed to get infrastructure catalog metrics", (result.get("error") or result.get("message", "")))
 
     def test_get_infrastructure_catalog_metrics_with_filter(self):
         """Test get_infrastructure_catalog_metrics with filter parameter"""
@@ -712,8 +712,8 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
         """Test get_plugin_schema with missing plugin parameter"""
         result = asyncio.run(self.client.get_plugin_schema(plugin=""))
 
-        self.assertIn("error", result)
-        self.assertIn("required", result["error"])
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("required", (result.get("error") or result.get("message", "")))
 
     def test_get_plugin_schema_metrics_error(self):
         """Test get_plugin_schema handles metrics error"""
@@ -876,7 +876,7 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_infrastructure_catalog_plugins_with_custom_metrics())
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_available_payload_keys_to_dict(self):
         """Test get_available_payload_keys_by_plugin_id with to_dict"""
@@ -927,7 +927,7 @@ class TestInfrastructureCatalogMCPTools(unittest.TestCase):
 
         result = asyncio.run(self.client.get_available_payload_keys_by_plugin_id(plugin_id="host"))
 
-        self.assertIn("error", result)
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
 
     def test_get_infrastructure_catalog_metrics_limit_50(self):
         """Test get_infrastructure_catalog_metrics limits to 50 items"""

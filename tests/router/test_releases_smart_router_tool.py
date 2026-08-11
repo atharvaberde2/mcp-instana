@@ -80,8 +80,8 @@ class TestReleasesSmartRouterMCPTool(unittest.TestCase):
             operation="invalid_op"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("invalid_op", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("invalid_op", (result.get("error") or result.get("message", "")).lower())
 
     def test_get_all_releases(self):
         """Test get_all_releases operation"""
@@ -139,8 +139,8 @@ class TestReleasesSmartRouterMCPTool(unittest.TestCase):
             operation="get_release"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("release_id", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("release_id", (result.get("error") or result.get("message", "")).lower())
 
     def test_create_release(self):
         """Test create_release operation"""
@@ -167,8 +167,8 @@ class TestReleasesSmartRouterMCPTool(unittest.TestCase):
             params={"start": 1742349976000}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("name", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("name", (result.get("error") or result.get("message", "")).lower())
 
     def test_create_release_missing_start(self):
         """Test create_release without start"""
@@ -177,8 +177,8 @@ class TestReleasesSmartRouterMCPTool(unittest.TestCase):
             params={"name": "frontend/release-2000"}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("start", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("start", (result.get("error") or result.get("message", "")).lower())
 
     def test_update_release(self):
         """Test update_release operation"""
@@ -205,8 +205,8 @@ class TestReleasesSmartRouterMCPTool(unittest.TestCase):
             params={"name": "frontend/release-2001", "start": 1742349976000}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("release_id", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("release_id", (result.get("error") or result.get("message", "")).lower())
 
     def test_delete_release(self):
         """Test delete_release operation"""
@@ -228,8 +228,8 @@ class TestReleasesSmartRouterMCPTool(unittest.TestCase):
             operation="delete_release"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("release_id", result["error"].lower())
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("release_id", (result.get("error") or result.get("message", "")).lower())
 
     def test_exception_handling(self):
         """Test exception handling in router"""
@@ -242,8 +242,8 @@ class TestReleasesSmartRouterMCPTool(unittest.TestCase):
             operation="get_all_releases"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Test error", str(result["error"]))
+        self.assertTrue("error" in result or result.get("elicitation_needed"))
+        self.assertIn("Test error", str((result.get("error") or result.get("message", ""))))
 
     def test_params_none_handling(self):
         """Test handling when params is None"""

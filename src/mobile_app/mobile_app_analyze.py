@@ -49,6 +49,7 @@ from src.core.utils import (
     register_as_tool,
     with_header_auth,
 )
+from src.core.validation import VALID_MOBILE_BEACON_TYPES, StructureValidator
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,80 @@ class MobileAppAnalyzeMCPTools(BaseInstanaClient):
             return metric_error
         return self.handle_api_error_response(response, "get mobile app beacon groups", logger)
 
+    @staticmethod
+    def _validate_beacon_group_structure(
+        metrics: Optional[List[Dict[str, Any]]],
+        group: Optional[Dict[str, str]],
+        tag_filter_expression: Optional[Dict[str, Any]],
+        time_frame: Optional[Dict[str, int]],
+        order: Optional[Dict[str, str]],
+        pagination: Optional[Dict[str, int]],
+    ) -> Optional[Dict[str, Any]]:
+        """Run structural validators; return an elicitation dict on failure, else None."""
+        errors: List[str] = []
+        for validator_fn, field_val, kwargs in [
+            (StructureValidator.validate_metrics_array, metrics, {"required": False}),
+            (StructureValidator.validate_group, group, {"required": False}),
+            (StructureValidator.validate_tag_filter_expression, tag_filter_expression, {}),
+            (StructureValidator.validate_time_frame, time_frame, {}),
+            (StructureValidator.validate_order, order, {}),
+            (StructureValidator.validate_pagination, pagination, {}),
+        ]:
+            result = validator_fn(field_val, **kwargs)
+            if result:
+                errors.extend(result["api_error"])
+        if not errors:
+            return None
+        return {
+            "elicitation_needed": True,
+            "reason": f"get_mobile_app_beacon_groups payload has {len(errors)} validation problem(s)",
+            "api_error": errors,
+            "message": (
+                f"The get_mobile_app_beacon_groups payload has {len(errors)} problem(s). "
+                "Correct all issues below and retry:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            ),
+        }
+
+    @staticmethod
+    def _validate_metric_compatibility_for_beacon_groups(
+        metrics: List[Dict[str, Any]],
+        beacon_type: str,
+        api_client: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Validate metric/beacon-type compatibility; return an error dict or None."""
+        from instana_client.api.mobile_app_catalog_api import MobileAppCatalogApi
+
+        from src.core.metric_validation import (
+            fetch_metric_catalog_internal,
+            validate_beacon_type_known,
+            validate_metric_compatibility,
+        )
+        from src.core.utils import MOBILE_BEACON_TYPE_MAP
+
+        beacon_type_error = validate_beacon_type_known(
+            beacon_type=beacon_type,
+            beacon_type_map=MOBILE_BEACON_TYPE_MAP,
+        )
+        if beacon_type_error:
+            return beacon_type_error
+
+        catalog_result = fetch_metric_catalog_internal(
+            api_client=api_client,
+            catalog_api_class=MobileAppCatalogApi,
+            fetch_method_name="get_mobile_app_metric_catalog_without_preload_content",
+        )
+        if isinstance(catalog_result, dict) and "error" in catalog_result:
+            return catalog_result
+
+        return validate_metric_compatibility(
+            metrics=metrics,
+            beacon_type=beacon_type,
+            catalog=catalog_result,
+            beacon_type_map=MOBILE_BEACON_TYPE_MAP,
+            catalog_operation="get_mobile_app_metric_catalog",
+        )
+
     @with_header_auth(MobileAppAnalyzeApi)
     async def get_mobile_app_beacon_groups(self,
     metrics: Optional[List[Dict[str, Any]]] = None,
@@ -235,7 +310,6 @@ class MobileAppAnalyzeMCPTools(BaseInstanaClient):
                 f"beacon_type={beacon_type}, time_frame={time_frame}"
             )
 
-            # Track what was user-provided vs defaulted
             user_provided_metrics = metrics is not None
             user_provided_group = group is not None
             user_provided_tag_filter = tag_filter_expression is not None and (
@@ -243,27 +317,27 @@ class MobileAppAnalyzeMCPTools(BaseInstanaClient):
                 (tag_filter_expression.get("type") == "EXPRESSION" and tag_filter_expression.get("elements"))
             )
 
-            # STEP 1: Check for required parameters BEFORE applying defaults
-            elicitation_request = self._check_elicitation_for_beacon_groups(
-                metrics, group, beacon_type
-            )
+            elicitation_request = self._check_elicitation_for_beacon_groups(metrics, group, beacon_type)
             if elicitation_request:
                 return elicitation_request
 
-            # STEP 2: Apply defaults AFTER elicitation check
+            validation_error = self._validate_beacon_group_structure(
+                metrics, group, tag_filter_expression, time_frame, order, pagination
+            )
+            if validation_error:
+                return validation_error
+
             beacon_type, metrics, group, time_frame, tag_filter_expression = (
                 self._apply_beacon_groups_defaults(
                     beacon_type, metrics, group, time_frame, tag_filter_expression
                 )
             )
 
-            # STEP 3: Validate user-provided metrics
             if user_provided_metrics:
                 metric_validation = self._validate_metrics(metrics, user_provided=True)
                 if metric_validation:
                     return metric_validation
 
-            # STEP 4: Validate user-provided tags
             if user_provided_group or user_provided_tag_filter:
                 tag_validation = self._validate_tag_names(
                     tag_filter_expression, group, beacon_type, use_case="GROUPING"
@@ -271,52 +345,19 @@ class MobileAppAnalyzeMCPTools(BaseInstanaClient):
                 if tag_validation:
                     return tag_validation
 
-            # STEP 5: Metric compatibility validation (last pre-flight step before query build)
             if user_provided_metrics:
-                from instana_client.api.mobile_app_catalog_api import (
-                    MobileAppCatalogApi,
-                )
-
-                from src.core.metric_validation import (
-                    fetch_metric_catalog_internal,
-                    validate_beacon_type_known,
-                    validate_metric_compatibility,
-                )
-                from src.core.utils import MOBILE_BEACON_TYPE_MAP
-
-                beacon_type_error = validate_beacon_type_known(
-                    beacon_type=beacon_type,
-                    beacon_type_map=MOBILE_BEACON_TYPE_MAP,
-                )
-                if beacon_type_error:
-                    return beacon_type_error
-
-                catalog_result = fetch_metric_catalog_internal(
-                    api_client=api_client,
-                    catalog_api_class=MobileAppCatalogApi,
-                    fetch_method_name="get_mobile_app_metric_catalog_without_preload_content",
-                )
-                if isinstance(catalog_result, dict) and "error" in catalog_result:
-                    return catalog_result
-
-                compatibility_error = validate_metric_compatibility(
-                    metrics=metrics,
-                    beacon_type=beacon_type,
-                    catalog=catalog_result,
-                    beacon_type_map=MOBILE_BEACON_TYPE_MAP,
-                    catalog_operation="get_mobile_app_metric_catalog",
+                compatibility_error = self._validate_metric_compatibility_for_beacon_groups(
+                    metrics, beacon_type, api_client
                 )
                 if compatibility_error:
                     return compatibility_error
 
-            # Build query parameters
             query_params = self._build_beacon_groups_query_params(
                 beacon_type, metrics, group, time_frame, tag_filter_expression, order, pagination
             )
             if "error" in query_params:
                 return query_params
 
-            # Create and execute API call
             return await self._execute_beacon_groups_api_call(query_params, fill_time_series, api_client)
 
         except Exception as e:
@@ -586,21 +627,49 @@ class MobileAppAnalyzeMCPTools(BaseInstanaClient):
                 f"pagination={pagination}, time_frame={time_frame}"
             )
 
-            # STEP 1: Apply defaults
-            time_frame, pagination, filter_fields = self._apply_beacons_defaults(time_frame, pagination, filter_fields)
+            # STEP 1: Pre-flight structural validation (collect ALL errors in one pass)
+            _sv_errors: List[str] = []
+            for _sv_fn, _sv_val, _sv_kw in [
+                (StructureValidator.validate_beacon_type, beacon_type,
+                    {"valid_types": VALID_MOBILE_BEACON_TYPES}),
+                (StructureValidator.validate_tag_filter_expression, tag_filter_expression, {}),
+                (StructureValidator.validate_time_frame, time_frame, {}),
+                (StructureValidator.validate_pagination, pagination, {}),
+            ]:
+                _sv_res = _sv_fn(_sv_val, **_sv_kw)
+                if _sv_res:
+                    _sv_errors.extend(_sv_res["api_error"])
+            if _sv_errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"get_all_mobile_app_beacons payload has {len(_sv_errors)} validation problem(s)",
+                    "api_error": _sv_errors,
+                    "message": (
+                        f"The get_all_mobile_app_beacons payload has {len(_sv_errors)} problem(s). "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e}" for e in _sv_errors)
+                    ),
+                }
 
-            # STEP 2: Required parameter check
+            # STEP 2: Required parameter check (beacon_type was not invalid but is missing)
             if not beacon_type:
                 return {
                     "elicitation_needed": True,
                     "missing_parameters": [{
                         "name": "beacon_type",
                         "description": "Type of beacon to retrieve (REQUIRED)",
-                        "examples": ["SESSION_START", "HTTP_REQUEST", "VIEW_CHANGE", "CRASH", "PERF"]
-                    }]
+                        "examples": sorted(VALID_MOBILE_BEACON_TYPES)
+                    }],
+                    "message": (
+                        "Please provide the beacon type you want to retrieve. "
+                        f"Valid values: {sorted(VALID_MOBILE_BEACON_TYPES)}"
+                    )
                 }
 
-            # STEP 3: Validate user-provided filters
+            # STEP 3: Apply defaults AFTER validation
+            time_frame, pagination, filter_fields = self._apply_beacons_defaults(time_frame, pagination, filter_fields)
+
+            # STEP 4: Validate user-provided filters
             has_user_filter = (
                 tag_filter_expression is not None
                 and tag_filter_expression.get("type") == "TAG_FILTER"

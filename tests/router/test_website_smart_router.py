@@ -67,9 +67,8 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
             operation="get_all"
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid resource_type", result["error"])
-        self.assertIn("valid_types", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("Invalid resource_type", result["message"])
 
     # Analyze Tests
     def test_analyze_get_beacon_groups(self):
@@ -84,7 +83,7 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
             operation="get_beacon_groups",
             params={
                 "metrics": [{"metric": "beaconCount", "aggregation": "SUM"}],
-                "group": {"groupByTag": "beacon.page.name"},
+                "group": {"groupbyTag": "beacon.page.name", "groupbyTagEntity": "NOT_APPLICABLE"},
                 "time_frame": {"to": 1609459200000, "windowSize": 3600000},
                 "beacon_type": "PAGELOAD"
             }
@@ -156,7 +155,7 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
                     {"metric": "onLoadTime", "aggregation": "MEAN"},
                     {"metric": "onLoadTime", "aggregation": "MAX"}
                 ],
-                "group": {"groupByTag": "beacon.page.name"},
+                "group": {"groupbyTag": "beacon.page.name", "groupbyTagEntity": "NOT_APPLICABLE"},
                 "beacon_type": "PAGELOAD"
             }
         ))
@@ -183,7 +182,7 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
                     "entity": "NOT_APPLICABLE",
                     "value": "checkout"
                 },
-                "group": {"groupByTag": "beacon.page.name"},
+                "group": {"groupbyTag": "beacon.page.name", "groupbyTagEntity": "NOT_APPLICABLE"},
                 "beacon_type": "PAGELOAD"
             }
         ))
@@ -209,7 +208,7 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
                     "entity": "NOT_APPLICABLE",
                     "value": "5000"
                 },
-                "group": {"groupByTag": "beacon.page.name"},
+                "group": {"groupbyTag": "beacon.page.name", "groupbyTagEntity": "NOT_APPLICABLE"},
                 "beacon_type": "PAGELOAD"
             }
         ))
@@ -224,9 +223,8 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
-        self.assertIn("valid_operations", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", result["message"])
 
     # Catalog Tests
     def test_catalog_get_metrics(self):
@@ -298,9 +296,10 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
 
     def test_catalog_beacon_type_normalization(self):
         """Test beacon_type normalization from uppercase to camelCase."""
+        captured = {}
+
         async def mock_get_tag_catalog(*args, **kwargs):
-            # Verify the normalized beacon_type is passed
-            self.assertEqual(kwargs.get("beacon_type"), "pageLoad")
+            captured["beacon_type"] = kwargs.get("beacon_type")
             return {"tags": ["beacon.website.name"]}
 
         self.mock_catalog_client.get_website_tag_catalog = mock_get_tag_catalog
@@ -312,6 +311,8 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
         ))
 
         self.assertIn("results", result)
+        # Router normalises PAGELOAD → pageLoad for the API
+        self.assertEqual(captured.get("beacon_type"), "pageLoad")
 
     def test_catalog_invalid_operation(self):
         """Test catalog with invalid operation."""
@@ -321,8 +322,8 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", result["message"])
 
     # Configuration Tests
     def test_configuration_get_all(self):
@@ -381,8 +382,8 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", result["message"])
 
     # Alert Tests - New find_active_*_alert_configs operations
     def test_alert_find_active_configs_success(self):
@@ -504,9 +505,8 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
-        self.assertIn("valid_operations", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", result["message"])
 
     # Error Handling Tests
     def test_exception_handling(self):
@@ -652,20 +652,15 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
         self.assertIn("results", result)
 
     def test_alert_no_params(self):
-        async def mock_alert(*args, **kwargs):
-            self.assertIsNone(kwargs.get("id"))
-            self.assertIsNone(kwargs.get("valid_on"))
-            return {"configs": []}
-
-        self.mock_alert_client.find_website_alert_config = mock_alert
-
+        """Omitting 'id' triggers a pre-flight elicitation at the router level."""
         result = asyncio.run(self.router.manage_websites(
             resource_type="alert",
             operation="find_website_alert_config",
             params={}
         ))
 
-        self.assertIn("results", result)
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any(e["field"] == "id" for e in result["api_error"]))
 
     def test_alert_invalid_operation(self):
         result = asyncio.run(self.router.manage_websites(
@@ -674,8 +669,8 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
             params={}
         ))
 
-        self.assertIn("error", result)
-        self.assertIn("Invalid operation", result["error"])
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertIn("Invalid operation", result["message"])
 
     def test_alert_exception_handling(self):
         async def mock_error(*args, **kwargs):
@@ -692,6 +687,280 @@ class TestWebsiteSmartRouterTool(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("Smart router error", result["error"])
 
+
+
+    # ------------------------------------------------------------------
+    # Pre-flight StructureValidator tests (added with INSTA-77605)
+    # ------------------------------------------------------------------
+
+    def test_preflight_invalid_beacon_type(self):
+        """Router rejects an invalid beacon_type before calling the service layer."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacons",
+            params={
+                "beacon_type": "NOT_A_REAL_TYPE",
+                "time_frame": {"windowSize": 3600000},
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("NOT_A_REAL_TYPE" in e for e in result["api_error"]))
+
+    def test_preflight_invalid_window_size(self):
+        """Router rejects a windowSize that exceeds the SDK upper bound."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacons",
+            params={
+                "beacon_type": "PAGELOAD",
+                "time_frame": {"windowSize": 9_999_999_999},
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("windowSize" in e for e in result["api_error"]))
+
+    def test_preflight_invalid_retrieval_size(self):
+        """Router rejects a retrievalSize outside [1, 200]."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacons",
+            params={
+                "beacon_type": "PAGELOAD",
+                "pagination": {"retrievalSize": 500},
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("retrievalSize" in e for e in result["api_error"]))
+
+    def test_preflight_invalid_aggregation_in_metrics(self):
+        """Router rejects a metrics entry with an unrecognised aggregation."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacon_groups",
+            params={
+                "metrics": [{"metric": "beaconCount", "aggregation": "INVALID_AGG"}],
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("INVALID_AGG" in e for e in result["api_error"]))
+
+    def test_preflight_tag_filter_missing_entity(self):
+        """Router rejects a TAG_FILTER that omits the required entity field."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacon_groups",
+            params={
+                "tag_filter_expression": {
+                    "type": "TAG_FILTER",
+                    "name": "beacon.page.name",
+                    "operator": "EQUALS",
+                    "value": "home",
+                    # entity intentionally omitted
+                }
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("entity" in e for e in result["api_error"]))
+
+    def test_preflight_invalid_order_direction(self):
+        """Router rejects an order with an invalid direction."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacon_groups",
+            params={
+                "order": {"by": "beaconCount", "direction": "DESCENDING"},
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("direction" in e for e in result["api_error"]))
+
+    def test_preflight_group_missing_entity(self):
+        """Router rejects a group dict that omits groupbyTagEntity."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacon_groups",
+            params={
+                "group": {"groupbyTag": "beacon.page.name"},
+                # groupbyTagEntity intentionally omitted
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("groupbyTagEntity" in e for e in result["api_error"]))
+
+    def test_preflight_multiple_errors_consolidated(self):
+        """Router collects ALL validation errors in a single response."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacons",
+            params={
+                "beacon_type": "BAD_TYPE",
+                "time_frame": {"windowSize": 9_999_999_999},
+                "pagination": {"retrievalSize": 0},
+            }
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        # All three problems must appear in one response — not split across calls
+        self.assertGreaterEqual(len(result["api_error"]), 3)
+
+    def test_preflight_valid_payload_reaches_service(self):
+        """A fully valid payload passes pre-flight and is forwarded to the service."""
+        captured = {}
+
+        async def mock_beacons(*args, **kwargs):
+            captured["called"] = True
+            return {"beacons": []}
+
+        self.mock_analyze_client.get_website_beacons = mock_beacons
+
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="analyze",
+            operation="get_beacons",
+            params={
+                "beacon_type": "PAGELOAD",
+                "time_frame": {"windowSize": 3600000},
+                "pagination": {"retrievalSize": 50},
+            }
+        ))
+
+        self.assertTrue(captured.get("called"), "Service layer was not called for a valid payload")
+        self.assertIn("results", result)
+
+
+    # ------------------------------------------------------------------
+    # Pre-flight tests added for website gap fixes
+    # ------------------------------------------------------------------
+
+    # --- _handle_alert required-field guards ---
+
+    def test_alert_find_active_missing_website_id(self):
+        """find_active_website_alert_configs rejects a missing website_id at the router level."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="alert",
+            operation="find_active_website_alert_configs",
+            params={},
+        ))
+
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertEqual(result["reason"], "missing_required_params")
+        self.assertTrue(any(e["field"] == "website_id" for e in result["api_error"]))
+        self.mock_alert_client.find_active_website_alert_configs.assert_not_called()
+
+    def test_alert_find_config_missing_id(self):
+        """find_website_alert_config rejects a missing id at the router level."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="alert",
+            operation="find_website_alert_config",
+            params={},
+        ))
+
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertEqual(result["reason"], "missing_required_params")
+        self.assertTrue(any(e["field"] == "id" for e in result["api_error"]))
+        self.mock_alert_client.find_website_alert_config.assert_not_called()
+
+    def test_alert_find_active_with_website_id_reaches_service(self):
+        """find_active_website_alert_configs with a valid website_id reaches the service."""
+        async def mock_find_active(*args, **kwargs):
+            return {"items": []}
+
+        self.mock_alert_client.find_active_website_alert_configs = mock_find_active
+
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="alert",
+            operation="find_active_website_alert_configs",
+            params={"website_id": "site-abc"},
+        ))
+
+        self.assertIn("results", result)
+        self.assertFalse(result.get("elicitation_needed"))
+
+    def test_alert_find_config_with_id_reaches_service(self):
+        """find_website_alert_config with a valid id reaches the service."""
+        async def mock_find(*args, **kwargs):
+            return {"id": "alert-1"}
+
+        self.mock_alert_client.find_website_alert_config = mock_find
+
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="alert",
+            operation="find_website_alert_config",
+            params={"id": "alert-1"},
+        ))
+
+        self.assertIn("results", result)
+        self.assertFalse(result.get("elicitation_needed"))
+
+    # --- _handle_catalog get_tag_catalog guards ---
+
+    def test_catalog_tag_catalog_missing_use_case_rejected(self):
+        """get_tag_catalog rejects a missing use_case before hitting the API."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="catalog",
+            operation="get_tag_catalog",
+            params={"beacon_type": "PAGELOAD"},
+        ))
+
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any(e["field"] == "use_case" for e in result["api_error"]))
+        self.mock_catalog_client.get_website_tag_catalog.assert_not_called()
+
+    def test_catalog_tag_catalog_invalid_beacon_type_rejected(self):
+        """get_tag_catalog rejects a beacon_type not in VALID_WEBSITE_BEACON_TYPES."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="catalog",
+            operation="get_tag_catalog",
+            params={"beacon_type": "SESSION_START", "use_case": "FILTERING"},
+        ))
+
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any(e["field"] == "beacon_type" for e in result["api_error"]))
+        self.assertTrue(any("SESSION_START" in e["issue"] for e in result["api_error"]))
+        self.mock_catalog_client.get_website_tag_catalog.assert_not_called()
+
+    def test_catalog_tag_catalog_both_errors_consolidated(self):
+        """Missing use_case AND invalid beacon_type are reported together in one response."""
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="catalog",
+            operation="get_tag_catalog",
+            params={"beacon_type": "SESSION_START"},
+        ))
+
+        self.assertTrue(result.get("elicitation_needed"))
+        fields = [e["field"] for e in result["api_error"]]
+        self.assertIn("use_case", fields)
+        self.assertIn("beacon_type", fields)
+
+    def test_catalog_tag_catalog_valid_params_reach_service(self):
+        """get_tag_catalog with valid beacon_type and use_case reaches the service."""
+        async def mock_tags(*args, **kwargs):
+            return {"tags": []}
+
+        self.mock_catalog_client.get_website_tag_catalog = mock_tags
+
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="catalog",
+            operation="get_tag_catalog",
+            params={"beacon_type": "PAGELOAD", "use_case": "FILTERING"},
+        ))
+
+        self.assertIn("results", result)
+        self.assertFalse(result.get("elicitation_needed"))
+
+    def test_catalog_tag_catalog_none_beacon_type_passes_through(self):
+        """get_tag_catalog with no beacon_type (optional) is still forwarded."""
+        async def mock_tags(*args, **kwargs):
+            return {"tags": []}
+
+        self.mock_catalog_client.get_website_tag_catalog = mock_tags
+
+        result = asyncio.run(self.router.manage_websites(
+            resource_type="catalog",
+            operation="get_tag_catalog",
+            params={"use_case": "FILTERING"},
+        ))
+
+        self.assertIn("results", result)
+        self.assertFalse(result.get("elicitation_needed"))
 
 
 if __name__ == "__main__":

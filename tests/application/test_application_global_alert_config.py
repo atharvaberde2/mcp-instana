@@ -1023,5 +1023,33 @@ class TestApplicationGlobalAlertMCPTools(unittest.TestCase):
         self.assertTrue(result["success"])
 
 
+    # ------------------------------------------------------------------
+    # Tests for execute_global_alert_config_operation — "find" requires id
+    # ------------------------------------------------------------------
+
+    def test_execute_global_alert_config_find_missing_id_returns_elicitation(self):
+        """'find' without id must return elicitation_needed (SDK requires id)."""
+        result = asyncio.run(self.client.execute_alert_config_operation(
+            operation="find",
+            application_id=None,
+            id=None,
+        ))
+        self.assertTrue(result.get("elicitation_needed"))
+        self.assertTrue(any("id" in e for e in result["api_error"]))
+
+    def test_execute_global_alert_config_find_with_id_proceeds(self):
+        """'find' with a valid id skips the elicitation gate."""
+        mock_result = {"id": "alert-1", "name": "Test"}
+        mock_obj = MagicMock()
+        mock_obj.to_dict.return_value = mock_result
+        self.alert_config_api.find_global_application_alert_config.return_value = mock_obj
+
+        result = asyncio.run(self.client.execute_alert_config_operation(
+            operation="find",
+            id="alert-1",
+        ))
+        self.assertFalse(result.get("elicitation_needed", False))
+
+
 if __name__ == '__main__':
     unittest.main()

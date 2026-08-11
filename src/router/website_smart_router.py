@@ -18,6 +18,7 @@ from src.core.utils import (
     normalize_beacon_type,
     register_as_tool,
 )
+from src.core.validation import VALID_WEBSITE_BEACON_TYPES, StructureValidator
 
 logger = logging.getLogger(__name__)
 
@@ -188,10 +189,19 @@ Examples:
                 params = {}
 
             # Validate resource_type
-            if resource_type not in ["analyze", "catalog", "configuration", "advanced_config", "alert"]:
+            valid_types = ["analyze", "catalog", "configuration", "advanced_config", "alert"]
+            if resource_type not in valid_types:
                 return {
-                    "error": f"Invalid resource_type '{resource_type}'. Valid types: 'analyze', 'catalog', 'configuration', 'advanced_config', 'alert'",
-                    "valid_types": ["analyze", "catalog", "configuration", "advanced_config", "alert"]
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"'{resource_type}' is not a valid resource type",
+                            "expected": valid_types
+                        }
+                    ],
+                    "message": f"Invalid resource_type '{resource_type}'. Must be one of: {valid_types}"
                 }
 
             # Route to the appropriate resource handler
@@ -207,8 +217,16 @@ Examples:
                 return await self._handle_alert(operation, params, ctx)
             else:
                 return {
-                    "error": f"Unsupported resource_type: {resource_type}",
-                    "supported_types": ["analyze", "catalog", "configuration", "advanced_config", "alert"]
+                    "elicitation_needed": True,
+                    "reason": "invalid_resource_type",
+                    "api_error": [
+                        {
+                            "field": "resource_type",
+                            "issue": f"Unsupported resource_type: {resource_type}",
+                            "expected": ["analyze", "catalog", "configuration", "advanced_config", "alert"]
+                        }
+                    ],
+                    "message": f"Unsupported resource_type '{resource_type}'. Must be one of: analyze, catalog, configuration, advanced_config, alert"
                 }
 
         except Exception as e:
@@ -234,12 +252,19 @@ Examples:
         # Validate operation
         if operation not in ANALYZE_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for analyze",
-                "valid_operations": ANALYZE_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid analyze operation",
+                        "expected": ANALYZE_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'analyze'. Valid operations: {ANALYZE_VALID_OPERATIONS}"
             }
 
         # Extract individual parameters from params dict
-        # This is the key difference - we extract each parameter separately
         metrics = params.get(PARAM_METRICS)
         group = params.get(PARAM_GROUP)
         tag_filter_expression = params.get(PARAM_TAG_FILTER_EXPRESSION)
@@ -259,16 +284,51 @@ Examples:
 
         if "error" in conversion_result:
             return {
-                "error": conversion_result["error"],
-                "resource_type": "analyze",
-                "operation": operation,
-                "original_params": params,
-                "hint": "Provide time_frame.to as Unix timestamp (ms) or datetime string with timezone (e.g., '10 March 2026, 2:00 PM|IST')"
+                "elicitation_needed": True,
+                "reason": "invalid_time_params",
+                "api_error": [
+                    {
+                        "field": "time_frame.to",
+                        "issue": conversion_result["error"],
+                        "expected": "Unix timestamp (ms) or datetime string with timezone (e.g., '10 March 2026, 2:00 PM|IST')"
+                    }
+                ],
+                "message": conversion_result["error"]
             }
 
         # Update time_frame with converted value if conversion occurred
         if conversion_result["converted"]:
             time_frame = conversion_result["params"][PARAM_TIME_FRAME]
+
+        # --- Pre-flight structural validation: collect ALL errors in one pass ---
+        # This prevents invalid payloads from ever reaching the service layer or
+        # the API, avoiding unnecessary API calls and rate-limit exhaustion.
+        _sv_errors: List[str] = []
+        for _sv_fn, _sv_val, _sv_kw in [
+            (StructureValidator.validate_beacon_type, beacon_type,
+                {"valid_types": VALID_WEBSITE_BEACON_TYPES}),
+            (StructureValidator.validate_metrics_array, metrics, {"required": False}),
+            (StructureValidator.validate_group, group, {"required": False}),
+            (StructureValidator.validate_tag_filter_expression, tag_filter_expression, {}),
+            (StructureValidator.validate_time_frame, time_frame, {}),
+            (StructureValidator.validate_order, order, {}),
+            (StructureValidator.validate_pagination, pagination, {}),
+        ]:
+            _sv_res = _sv_fn(_sv_val, **_sv_kw)
+            if _sv_res:
+                _sv_errors.extend(_sv_res["api_error"])
+        if _sv_errors:
+            return {
+                "elicitation_needed": True,
+                "reason": f"analyze '{operation}' payload has {len(_sv_errors)} validation problem(s)",
+                "api_error": _sv_errors,
+                "message": (
+                    f"The analyze '{operation}' payload has {len(_sv_errors)} problem(s). "
+                    "Correct all issues below and retry:\n"
+                    + "\n".join(f"  - {e}" for e in _sv_errors)
+                ),
+            }
+        # --- End pre-flight validation ---
 
         # Route to specific operation
         if operation == "get_beacon_groups":
@@ -329,8 +389,16 @@ Examples:
         # Validate operation
         if operation not in CATALOG_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for catalog",
-                "valid_operations": CATALOG_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid catalog operation",
+                        "expected": CATALOG_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'catalog'. Valid operations: {CATALOG_VALID_OPERATIONS}"
             }
 
         #Route to specific operation
@@ -348,6 +416,37 @@ Examples:
                 f"Routing to Website Tag Catalog | "
                 f"beacon_type={beacon_type}, use_case={use_case}"
             )
+
+            # Pre-flight: collect all catalog errors before hitting the API
+            _cat_errors = []
+
+            # use_case is required by the API
+            if not use_case:
+                _cat_errors.append({
+                    "field": "use_case",
+                    "issue": "use_case is required for get_tag_catalog",
+                    "expected": ["GROUPING", "FILTERING", "SERVICE_MAPPING", "SMART_ALERTS"]
+                })
+
+            # beacon_type: reject values that belong to mobile app, not website
+            if beacon_type is not None and beacon_type not in VALID_WEBSITE_BEACON_TYPES:
+                _cat_errors.append({
+                    "field": "beacon_type",
+                    "issue": f"'{beacon_type}' is not a valid website beacon type",
+                    "expected": sorted(VALID_WEBSITE_BEACON_TYPES)
+                })
+
+            if _cat_errors:
+                return {
+                    "elicitation_needed": True,
+                    "reason": f"get_tag_catalog has {len(_cat_errors)} invalid parameter(s)",
+                    "api_error": _cat_errors,
+                    "message": (
+                        f"get_tag_catalog has {len(_cat_errors)} problem(s). "
+                        "Correct all issues below and retry:\n"
+                        + "\n".join(f"  - {e['field']}: {e['issue']}" for e in _cat_errors)
+                    )
+                }
 
             # Normalize beacon_type to camelCase format (API expects camelCase)
             normalized_beacon_type = normalize_beacon_type(beacon_type, WEBSITE_BEACON_TYPE_MAP)
@@ -380,8 +479,16 @@ Examples:
         """
         if operation not in CONFIGURATION_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for configuration",
-                "valid_operations": CONFIGURATION_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid configuration operation",
+                        "expected": CONFIGURATION_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'configuration'. Valid operations: {CONFIGURATION_VALID_OPERATIONS}"
             }
 
         # Extract parameters
@@ -420,9 +527,17 @@ Examples:
         """
         if operation not in ADVANCED_CONFIG_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for advanced_config",
-                "valid_operations": ADVANCED_CONFIG_VALID_OPERATIONS,
-                "note": "Only GET operations are supported. Use Instana UI for modifications."
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid advanced_config operation",
+                        "expected": ADVANCED_CONFIG_VALID_OPERATIONS,
+                        "note": "Only GET operations are supported. Use Instana UI for modifications."
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'advanced_config'. Valid operations: {ADVANCED_CONFIG_VALID_OPERATIONS}"
             }
 
         # Extract parameters
@@ -456,8 +571,16 @@ Examples:
         # Validate operation
         if operation not in ALERT_VALID_OPERATIONS:
             return {
-                "error": f"Invalid operation '{operation}' for alert",
-                "valid_operations": ALERT_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"'{operation}' is not a valid alert operation",
+                        "expected": ALERT_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Invalid operation '{operation}' for resource_type 'alert'. Valid operations: {ALERT_VALID_OPERATIONS}"
             }
 
         # Initialize result to avoid unbound variable error
@@ -467,6 +590,21 @@ Examples:
         if operation == "find_active_website_alert_configs":
             website_id = params.get(PARAM_WEBSITE_ID)
             alert_ids = params.get(PARAM_ALERT_IDS)
+
+            # Pre-flight: website_id is required
+            if not website_id:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "website_id",
+                            "issue": "website_id is required for find_active_website_alert_configs",
+                            "hint": "Use resource_type='configuration', operation='get_all' to list available website IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'website_id'. Use configuration/get_all to list available website IDs."
+                }
 
             logger.debug(f"Routing to find_active_website_alert_configs with website_id={website_id}")
             result = await self.website_alert_client.find_active_website_alert_configs(
@@ -478,6 +616,21 @@ Examples:
             alert_id = params.get(PARAM_ALERT_ID)
             valid_on = params.get(PARAM_VALID_ON)
 
+            # Pre-flight: id is required
+            if not alert_id:
+                return {
+                    "elicitation_needed": True,
+                    "reason": "missing_required_params",
+                    "api_error": [
+                        {
+                            "field": "id",
+                            "issue": "id is required for find_website_alert_config",
+                            "hint": "Use resource_type='alert', operation='find_active_website_alert_configs' to list available alert config IDs"
+                        }
+                    ],
+                    "message": "Missing required parameter 'id'. Use alert/find_active_website_alert_configs to list available IDs."
+                }
+
             logger.debug(f"Routing to find_website_alert_config with id={alert_id}")
             result = await self.website_alert_client.find_website_alert_config(
                 id=alert_id,
@@ -487,8 +640,16 @@ Examples:
         else:
             # This should never happen due to validation above, but handle it gracefully
             return {
-                "error": f"Unhandled operation '{operation}' for alert",
-                "valid_operations": ALERT_VALID_OPERATIONS
+                "elicitation_needed": True,
+                "reason": "invalid_operation",
+                "api_error": [
+                    {
+                        "field": "operation",
+                        "issue": f"Unhandled operation '{operation}' for alert",
+                        "expected": ALERT_VALID_OPERATIONS
+                    }
+                ],
+                "message": f"Unhandled operation '{operation}' for resource_type 'alert'. Valid operations: {ALERT_VALID_OPERATIONS}"
             }
 
         # Return structured response
