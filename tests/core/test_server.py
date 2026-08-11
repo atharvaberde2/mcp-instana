@@ -674,8 +674,12 @@ class TestMCPServerAsync(unittest.TestCase):
             with patch('src.core.server.sys.exit') as mock_exit:
                 main()
 
-            # Check error output
-            mock_logger_error.assert_any_call("Failed to start HTTP server: HTTP server error")
+            # Message now includes [server] prefix and exc_info=True
+            error_calls = [str(c) for c in mock_logger_error.call_args_list]
+            self.assertTrue(
+                any("HTTP server stopped with an error" in c for c in error_calls),
+                f"Expected '[server] HTTP server stopped with an error' in logger calls, got: {error_calls}"
+            )
             mock_exit.assert_called_with(1)
 
     @patch('src.core.server.argparse.ArgumentParser')
@@ -902,3 +906,328 @@ class TestMCPServerAsync(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
+
+
+class TestHTTPServerShutdownBehaviour(unittest.TestCase):
+    """Tests for the new shutdown-reason tracking and signal-handler logic added
+    to the streamable-http transport branch of main()."""
+
+    def setUp(self):
+        # set_log_level calls logging.getLogger().setLevel() — when run as part
+        # of the full test suite, a prior test may leave logging.INFO as a
+        # MagicMock which causes set_log_level to raise.  Patch it to a no-op
+        # for the duration of this class so our tests are order-independent.
+        self._log_level_patcher = patch('src.core.server.set_log_level')
+        self._log_level_patcher.start()
+
+    def tearDown(self):
+        self._log_level_patcher.stop()
+
+    def _make_args(self, transport="streamable-http", debug=False, tools=None):
+        """Return a mock args namespace that looks like a parsed argparse result."""
+        args = MagicMock()
+        args.transport = transport
+        args.debug = debug
+        args.tools = tools
+        args.help = False
+        args.list_tools = False
+        args.log_level = "INFO"
+        args.api_token = None
+        args.base_url = None
+        args.port = 8600
+        return args
+
+    def _setup_parser(self, mock_arg_parser, args):
+        mock_parser = MagicMock()
+        mock_arg_parser.return_value = mock_parser
+        mock_parser.parse_args.return_value = args
+        return mock_parser
+
+    # ------------------------------------------------------------------
+    # 1. Graceful return from app.run() → sys.exit(0) + clean log
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_clean_shutdown_exits_zero(self, mock_create_app, mock_arg_parser):
+        """app.run() returning normally must NOT call sys.exit(1) and must return cleanly.
+
+        sys.exit(0) is intentionally absent from the normal return path — adding it
+        would be caught by the except SystemExit block and log the "stopped cleanly"
+        message twice. Python exits with implicit code 0 when main() returns.
+        """
+        mock_app = MagicMock()
+        mock_app.run.return_value = None          # normal return, no exception
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit') as mock_exit:
+            with patch('src.core.server.signal.signal'):
+                main()
+
+        # sys.exit must NOT be called on a normal return — implicit code 0 is correct
+        mock_exit.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # 2. Graceful return logs the clean-stop message
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_clean_shutdown_logs_reason(self, mock_create_app, mock_arg_parser):
+        """app.run() returning normally must log the clean-stop message."""
+        mock_app = MagicMock()
+        mock_app.run.return_value = None
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit'):
+            with patch('src.core.server.signal.signal'):
+                with patch('src.core.server.logger.info') as mock_info:
+                    main()
+
+        info_messages = [str(c) for c in mock_info.call_args_list]
+        self.assertTrue(
+            any("HTTP server stopped cleanly" in m for m in info_messages),
+            f"Expected 'HTTP server stopped cleanly' log. Got: {info_messages}"
+        )
+
+    # ------------------------------------------------------------------
+    # 3. SIGTERM handler updates shutdown reason
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_sigterm_updates_shutdown_reason(self, mock_create_app, mock_arg_parser):
+        """SIGTERM handler must update _shutdown_reason and log a graceful-shutdown message."""
+        import signal as signal_module
+
+        captured_handlers = {}
+
+        def capture_signal(sig, handler):
+            captured_handlers[sig] = handler
+
+        mock_app = MagicMock()
+
+        def run_and_fire_sigterm(*args, **kwargs):
+            # Simulate SIGTERM arriving while the server is running
+            handler = captured_handlers.get(signal_module.SIGTERM)
+            if handler:
+                handler(signal_module.SIGTERM, None)
+
+        mock_app.run.side_effect = run_and_fire_sigterm
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit'):
+            with patch('src.core.server.signal.signal', side_effect=capture_signal):
+                with patch('src.core.server.logger.info') as mock_info:
+                    main()
+
+        info_messages = [str(c) for c in mock_info.call_args_list]
+        self.assertTrue(
+            any("SIGTERM" in m for m in info_messages),
+            f"Expected SIGTERM log. Got: {info_messages}"
+        )
+        self.assertTrue(
+            any("HTTP server stopped cleanly" in m and "SIGTERM" in m for m in info_messages),
+            f"Expected clean-stop log containing SIGTERM reason. Got: {info_messages}"
+        )
+
+    # ------------------------------------------------------------------
+    # 4. SIGINT handler updates shutdown reason
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_sigint_updates_shutdown_reason(self, mock_create_app, mock_arg_parser):
+        """SIGINT handler must update _shutdown_reason and log a graceful-shutdown message."""
+        import signal as signal_module
+
+        captured_handlers = {}
+
+        def capture_signal(sig, handler):
+            captured_handlers[sig] = handler
+
+        mock_app = MagicMock()
+
+        def run_and_fire_sigint(*args, **kwargs):
+            handler = captured_handlers.get(signal_module.SIGINT)
+            if handler:
+                handler(signal_module.SIGINT, None)
+
+        mock_app.run.side_effect = run_and_fire_sigint
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit'):
+            with patch('src.core.server.signal.signal', side_effect=capture_signal):
+                with patch('src.core.server.logger.info') as mock_info:
+                    main()
+
+        info_messages = [str(c) for c in mock_info.call_args_list]
+        self.assertTrue(
+            any("SIGINT" in m for m in info_messages),
+            f"Expected SIGINT log. Got: {info_messages}"
+        )
+
+    # ------------------------------------------------------------------
+    # 5. SystemExit(0) from uvicorn → propagated as exit(0) + clean log
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_systemexit_zero_propagated_clean(self, mock_create_app, mock_arg_parser):
+        """SystemExit(0) from uvicorn must be caught and re-raised as sys.exit(0)."""
+        mock_app = MagicMock()
+        mock_app.run.side_effect = SystemExit(0)
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit') as mock_exit:
+            with patch('src.core.server.signal.signal'):
+                with patch('src.core.server.logger.info') as mock_info:
+                    main()
+
+        mock_exit.assert_called_once_with(0)
+        info_messages = [str(c) for c in mock_info.call_args_list]
+        self.assertTrue(
+            any("HTTP server stopped cleanly" in m for m in info_messages),
+            f"Expected clean-stop log for SystemExit(0). Got: {info_messages}"
+        )
+
+    # ------------------------------------------------------------------
+    # 6. SystemExit(3) from uvicorn (port conflict) → exit(3) + error log
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_systemexit_nonzero_propagated_as_error(self, mock_create_app, mock_arg_parser):
+        """SystemExit(3) from uvicorn (port in use) must exit(3) and log an error."""
+        mock_app = MagicMock()
+        mock_app.run.side_effect = SystemExit(3)
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit') as mock_exit:
+            with patch('src.core.server.signal.signal'):
+                with patch('src.core.server.logger.error') as mock_error:
+                    main()
+
+        mock_exit.assert_called_once_with(3)
+        error_messages = [str(c) for c in mock_error.call_args_list]
+        self.assertTrue(
+            any("exit code: 3" in m for m in error_messages),
+            f"Expected 'exit code: 3' in error log. Got: {error_messages}"
+        )
+        self.assertTrue(
+            any("address already in use" in m for m in error_messages),
+            f"Expected hint about 'address already in use'. Got: {error_messages}"
+        )
+
+    # ------------------------------------------------------------------
+    # 7. SystemExit with a non-int code → treated as exit(1)
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_systemexit_non_int_code_defaults_to_one(self, mock_create_app, mock_arg_parser):
+        """SystemExit with a non-integer code must default to exit(1)."""
+        mock_app = MagicMock()
+        mock_app.run.side_effect = SystemExit("some string code")
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit') as mock_exit:
+            with patch('src.core.server.signal.signal'):
+                with patch('src.core.server.logger.error'):
+                    main()
+
+        mock_exit.assert_called_once_with(1)
+
+    # ------------------------------------------------------------------
+    # 8. Exception (not SystemExit) → exit(1) + error log with exc_info
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_exception_exits_one_with_full_log(self, mock_create_app, mock_arg_parser):
+        """A plain Exception from app.run() must call sys.exit(1) and log with exc_info."""
+        mock_app = MagicMock()
+        mock_app.run.side_effect = RuntimeError("unexpected crash")
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit') as mock_exit:
+            with patch('src.core.server.signal.signal'):
+                with patch('src.core.server.logger.error') as mock_error:
+                    main()
+
+        mock_exit.assert_called_once_with(1)
+        error_calls = mock_error.call_args_list
+        # exc_info=True must be present for full stack trace
+        self.assertTrue(
+            any(c.kwargs.get('exc_info') is True for c in error_calls),
+            f"Expected exc_info=True in logger.error call. Got: {error_calls}"
+        )
+        # Exception message must appear directly — no "Reason: unknown" noise
+        error_messages = [str(c) for c in error_calls]
+        self.assertTrue(
+            any("unexpected crash" in m for m in error_messages),
+            f"Expected exception message in log. Got: {error_messages}"
+        )
+        self.assertFalse(
+            any("Reason: unknown" in m for m in error_messages),
+            f"'Reason: unknown' must not appear in exception log. Got: {error_messages}"
+        )
+
+    # ------------------------------------------------------------------
+    # 9. signal.signal is called for both SIGTERM and SIGINT
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_both_signal_handlers_registered(self, mock_create_app, mock_arg_parser):
+        """Both SIGTERM and SIGINT handlers must be registered before app.run() is called."""
+        import signal as signal_module
+
+        mock_app = MagicMock()
+        mock_app.run.return_value = None
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        registered_signals = []
+
+        def capture(sig, handler):
+            registered_signals.append(sig)
+
+        with patch('src.core.server.sys.exit'):
+            with patch('src.core.server.signal.signal', side_effect=capture):
+                main()
+
+        self.assertIn(signal_module.SIGTERM, registered_signals)
+        self.assertIn(signal_module.SIGINT, registered_signals)
+
+    # ------------------------------------------------------------------
+    # 10. Shutdown reason defaults to "unknown" when no signal fires
+    # ------------------------------------------------------------------
+    @patch('src.core.server.argparse.ArgumentParser')
+    @patch('src.core.server.create_app')
+    @patch('src.core.server.sys.argv', ['mcp_server.py', '--transport', 'streamable-http'])
+    def test_unknown_reason_when_no_signal(self, mock_create_app, mock_arg_parser):
+        """When no signal fires, the shutdown reason in the log must be 'unknown'."""
+        mock_app = MagicMock()
+        mock_app.run.side_effect = SystemExit(3)   # fatal error, no signal
+        mock_create_app.return_value = (mock_app, 1, 8600)
+        self._setup_parser(mock_arg_parser, self._make_args())
+
+        with patch('src.core.server.sys.exit'):
+            with patch('src.core.server.signal.signal'):
+                with patch('src.core.server.logger.error') as mock_error:
+                    main()
+
+        error_messages = [str(c) for c in mock_error.call_args_list]
+        self.assertTrue(
+            any("unknown" in m for m in error_messages),
+            f"Expected 'unknown' reason in error log. Got: {error_messages}"
+        )

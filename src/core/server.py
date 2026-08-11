@@ -8,6 +8,7 @@ Supports stdio and Streamable HTTP transports.
 import argparse
 import logging
 import os
+import signal
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -428,6 +429,23 @@ def get_enabled_client_configs(enabled_categories: str):
 def main():
     """Main entry point for the MCP server."""
     try:
+        # Register signal handlers immediately — before create_app() or any other
+        # blocking work — so a SIGTERM that arrives during startup (e.g. Kubernetes
+        # rolling restart firing before the server is fully up) is captured and logged
+        # rather than killing the process silently with no record.
+        _shutdown_reason: list[str] = ["unknown"]
+
+        def _handle_sigterm(signum, frame):
+            _shutdown_reason[0] = "SIGTERM (Kubernetes asked the pod to stop — rolling restart, scale-down, or node pressure)"
+            logger.info("[server] Received SIGTERM — beginning graceful shutdown")
+
+        def _handle_sigint(signum, frame):
+            _shutdown_reason[0] = "SIGINT (keyboard interrupt or container stop)"
+            logger.info("[server] Received SIGINT — beginning graceful shutdown")
+
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+        signal.signal(signal.SIGINT, _handle_sigint)
+
         # Create and configure the MCP server
         parser = argparse.ArgumentParser(description="Instana MCP Server", add_help=False)
         parser.add_argument(
@@ -489,13 +507,13 @@ def main():
             help="Enable SSL certificate verification. Equivalent to INSTANA_SSL_VERIFY=true."
         )
         # Check for help arguments before parsing
-        if len(sys.argv) > 1 and any(arg in ['-h','--h','--help','-help'] for arg in sys.argv[1:]):
+        if len(sys.argv) > 1 and any(arg in ['-h', '--help'] for arg in sys.argv[1:]):
             # Check if help is combined with other arguments
-            help_args = ['-h','--h','--help','-help']
+            help_args = ['-h', '--help']
             other_args = [arg for arg in sys.argv[1:] if arg not in help_args]
 
             if other_args:
-                logger.error("Argument -h/--h/--help/-help: not allowed with other arguments")
+                logger.error("Argument -h/--help: not allowed with other arguments")
                 sys.exit(2)
 
             # Show help and exit
@@ -609,10 +627,27 @@ def main():
                 logger.info(f"Registered tools: {registered_tool_count}")
             try:
                 app.run(transport="streamable-http", host="0.0.0.0", port=port)
+                # app.run() returns normally on graceful shutdown (e.g. SIGTERM).
+                # sys.exit(0) gets caught by the except in SystemExit block below
+                # and duplicates the "stopped cleanly" log.
+                logger.info(f"[server] HTTP server stopped cleanly. Reason: {_shutdown_reason[0]}")
+            except SystemExit as e:
+                # uvicorn calls sys.exit() internally on fatal errors (e.g. port already in
+                # use exits with code 3). SystemExit is not an Exception so it bypasses a
+                # plain `except Exception` block — catch it explicitly so we can log the
+                # reason before re-raising with the original exit code.
+                exit_code = e.code if isinstance(e.code, int) else 1
+                if exit_code == 0:
+                    logger.info(f"[server] HTTP server stopped cleanly. Reason: {_shutdown_reason[0]}")
+                else:
+                    logger.error(
+                        f"[server] HTTP server stopped with an error (exit code: {exit_code}). "
+                        f"Reason: {_shutdown_reason[0]}. "
+                        f"Check the uvicorn output above for details (e.g. 'address already in use')."
+                    )
+                sys.exit(exit_code)
             except Exception as e:
-                logger.error(f"Failed to start HTTP server: {e}")
-                if args.debug:
-                    logger.error("HTTP server error details", exc_info=True)
+                logger.error(f"[server] HTTP server stopped with an error: {e}", exc_info=True)
                 sys.exit(1)
         else:
             logger.info("Starting stdio transport")
