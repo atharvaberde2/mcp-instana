@@ -72,6 +72,18 @@ class ActionHistoryPrompts:
         - Action statuses: {action_statuses or 'None'}
         - Order by: {order_by or 'None'}
         - Order direction: {order_direction or 'None'}
+
+        Steps:
+        1. Apply filters to narrow down action execution history
+        2. Paginate through results using page and page_size
+        3. Filter by status (SUCCESS, FAILED), snapshot, event, or search term
+        4. Sort results using order_by and order_direction
+
+        Related coverage:
+        - For maintenance window operations (create, modify, close, list, validate, templates),
+          use the manage_maintenance_windows tool with resource_type="window" or "templates"
+        - For event queries (incidents, issues, changes, Kubernetes info events, agent monitoring events),
+          use the manage_events tool with the appropriate operation
         """
 
     @auto_register_prompt

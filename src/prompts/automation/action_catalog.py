@@ -26,6 +26,16 @@ class ActionCatalogPrompts:
         return """
         Get all available automation actions from the action catalog.
         Returns cleaned action data optimized for LLM consumption.
+
+        Steps:
+        1. Fetch all automation actions from the catalog
+        2. Return cleaned action data with names, descriptions, and types
+
+        Related coverage:
+        - For maintenance window operations (create, modify, close, list, validate, templates),
+          use the manage_maintenance_windows tool with resource_type="window" or "templates"
+        - For event queries (incidents, issues, changes, Kubernetes info events, agent monitoring events),
+          use the manage_events tool with the appropriate operation
         """
 
     @auto_register_prompt
